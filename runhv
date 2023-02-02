@@ -1,0 +1,13 @@
+#!/bin/bash
+
+echo "Loading kernel module"
+
+sudo insmod linuxvisor.ko
+
+echo "Unloading kernel module"
+
+sudo rmmod linuxvisor
+
+echo "Printing debug messages"
+
+dmesg |tail
