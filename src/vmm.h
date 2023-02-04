@@ -3,6 +3,8 @@
 
 #include <linux/kernel.h>
 
+#define PAGE_SIZE 4096
+
 typedef struct _GUEST_CPU_STATE
 {
     bool IsOnVmxRootMode;
@@ -39,8 +41,6 @@ typedef union _CR_FIXED
 
 extern GUEST_CPU_STATE* g_VMMContext;
 
-void testFunc(void);
-
 bool InitVMM(void); 
 bool ShutdownVMM(void);
 
@@ -48,7 +48,5 @@ void InitSingleCPU(void* info, u64 ip, u64 sp, u64 flags);
 
 void AdjustCR4AndCr0Bits(void); // complete
 
-// not complete
-bool AllocateVMRegion(void);
 
 #endif

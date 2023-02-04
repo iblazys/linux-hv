@@ -1,6 +1,6 @@
 /* 
  * vmm.c - our virtual machine manager
- */ 
+ */
 #include "vmm.h"
 
 #include <linux/kernel.h>
@@ -15,6 +15,8 @@
 #include "arch.h"
 #include "../ia32-doc/out/ia32.h" //
 #include "asmdefs.h"
+#include "vmx.h"
+#include "vmcs.h"
 
 // this doesnt need to be global anymore
 VMM_STATE* g_VMMState;
@@ -76,65 +78,48 @@ bool ShutdownVMM(void)
     return true;
 }
 
-void testFunc(void)
-{
-    unsigned int cpu;
-    
-    cpu = get_cpu();
-
-    //pr_info("Running on CPU: %u\n", cpu);
-
-    //pr_info("GuestState[%d] address: 0x%llx", cpu, g_GuestState);
-
-    //VIRTUAL_CPU_STATE* currentCpu = &g_VMMContext[cpu];
-
-    //pr_info("GuestState[%d] address: 0x%llx", cpu, currentCpu);
-
-    //currentCpu->VmcsRegionPhysicalAddress = 0xFFFFFFFF;
-
-    //put_cpu(); // Don't forget this!
-}
-
 //
 // Called from asm, ran on every cpu
+// Allocates the memory, enables vmxe in cr4, and sets up the vmcs
 //
 void InitSingleCPU(void* info, u64 ip, u64 sp, u64 flags)
 {
-    uint32_t current_cpu = smp_processor_id();
-    GUEST_CPU_STATE* vcpu = &((VMM_STATE*)info)->GuestCPUs[current_cpu];
+    uint32_t cpu = smp_processor_id();
+    GUEST_CPU_STATE* current_vcpu = &((VMM_STATE*)info)->GuestCPUs[cpu];
+
+    if(current_vcpu < 0)
+    {
+        pr_info("failed to get vcpu[%d]", cpu);
+    }
 
     //pr_info("guest will resume to %p with rsp=%llx on fail\n", (void*)ip, sp);
 
     CpuEnableVmxOperation();
-
     //pr_info("vmx operation enabled on cpuid %d", current_cpu);
 
     // Adjust control register bits
     AdjustCR4AndCr0Bits();
+    //pr_info("adjusted control register bits");
 
-    // Allocate vm regions
-    void* vmxon_region = kzalloc(4096, GFP_KERNEL);
-
-   	if(vmxon_region == NULL)
+    if(!AllocVmxOnRegion(current_vcpu)) 
     {
-		printk(KERN_INFO "Error allocating vmxon region\n");
-        // vmm_state->last_error = 0;
-        return;
-   	}
-
-    long vmxon_phy_region = __pa(vmxon_region);
-    uint32_t revisionId = _readmsr(IA32_VMX_BASIC);
-
-    *(uint32_t *)vmxon_region = revisionId; // set revision id
-
-    // set vm regions
-    vcpu->VmxonRegionPhysicalAddress = vmxon_phy_region;
-    vcpu->VmxonRegionVirtualAddress = vmxon_region;
+        // Handled
+        goto error;
+    }
 
     pr_info("vcpu[%d] vmxon_region virt: %llx, phys: %llx",
-        current_cpu, vmxon_region, vmxon_phy_region);
+        cpu, current_vcpu->VmxonRegionVirtualAddress, current_vcpu->VmxonRegionPhysicalAddress);
 
-    // allocate vmcs regions
+    
+    if(!AllocVmcsRegion(current_vcpu))
+    {
+        // Handled
+        goto error;
+    }
+
+    pr_info("vcpu[%d] vmcs_region virt: %llx, phys: %llx",
+        cpu, current_vcpu->VmcsRegionVirtualAddress, current_vcpu->VmcsRegionPhysicalAddress);
+
     
     /*
     if (_vmxon(vmxon_phy_region)) 
@@ -146,10 +131,8 @@ void InitSingleCPU(void* info, u64 ip, u64 sp, u64 flags)
         //return false;
     }
     */
-
-    
-
-    //return true;
+error:
+    return;
 }
 
 void AdjustCR4AndCr0Bits(void)
@@ -179,16 +162,4 @@ void AdjustCR4AndCr0Bits(void)
     Cr4.AsUInt &= CrFixed.Fields.Low;
 
     _writecr4(Cr4.AsUInt);
-}
-
-bool AllocateVMRegion(void)
-{
-    uint32_t RegionSize = 2 * 4096; // TODO: define vmxonsize
-
-    void* region = vzalloc(RegionSize + 4096); // TODO: define alignment page size
-
-    pr_info("vmxonregion at address: 0x%p", region);
-
-    vfree(region);
-    return true;
 }
