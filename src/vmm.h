@@ -3,7 +3,7 @@
 
 #include <linux/kernel.h>
 
-typedef struct _VIRTUAL_CPU_STATE
+typedef struct _GUEST_CPU_STATE
 {
     bool IsOnVmxRootMode;
     bool IncrementRip;
@@ -16,7 +16,13 @@ typedef struct _VIRTUAL_CPU_STATE
     uint64_t MsrBitmapPhysicalAddress;
                                                     
     uint64_t VmmStack;                                    
-} VIRTUAL_CPU_STATE, * PVIRTUAL_CPU_STATE;
+} GUEST_CPU_STATE, * PGUEST_CPU_STATE;
+
+typedef struct VMM_STATE
+{
+    bool IsRunning;
+    GUEST_CPU_STATE* GuestCPUs;
+} VMM_STATE, * PVMM_STATE;
 
 typedef union _CR_FIXED
 {
@@ -31,17 +37,16 @@ typedef union _CR_FIXED
 
 } CR_FIXED, * PCR_FIXED;
 
-extern VIRTUAL_CPU_STATE* g_GuestState;
+extern GUEST_CPU_STATE* g_VMMContext;
 
 void testFunc(void);
 
-bool InitVMM(void);
+bool InitVMM(void); 
 bool ShutdownVMM(void);
-bool CheckCPUFeatures(void);
 
-void AllocateVMRegionOnAllCPU(void); // current
+void InitSingleCPU(void* info, u64 ip, u64 sp, u64 flags);
 
-void AdjustCR4AndCr0Bits(void);
+void AdjustCR4AndCr0Bits(void); // complete
 
 // not complete
 bool AllocateVMRegion(void);

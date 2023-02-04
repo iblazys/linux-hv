@@ -1,6 +1,7 @@
 /* 
  * vmm.c - our virtual machine manager
  */ 
+#include "vmm.h"
 
 #include <linux/kernel.h>
 #include <linux/slab.h> // kalloc
@@ -8,38 +9,44 @@
 #include <linux/vmalloc.h> // vmalloc
 #include <linux/smp.h>     // get_cpu(), put_cpu()
 
+#include <asm/msr.h> // rdmsr testing
 #include <cpuid.h> // cpuid intrinsic
 
-#include "../ia32-doc/out/ia32.h"
-#include "vmm.h"
+#include "arch.h"
+#include "../ia32-doc/out/ia32.h" //
 #include "asmdefs.h"
 
-VIRTUAL_CPU_STATE* g_GuestState;
+// this doesnt need to be global anymore
+VMM_STATE* g_VMMState;
+//GUEST_CPU_STATE* g_VMMContext;
 
 bool InitVMM(void)
-{        
-    if(!CheckCPUFeatures()) 
+{   
+    VMM_STATE* VmmState;
+
+    if(!CpuHasVmxSupport()) 
     {
         // Handled by above function. 
         return false;
     }
 
-    pr_info("VMX support detected");
+    pr_info("vMX support detected");
 
+    // Allocate state memory - move to an InitVmmState function or something
     int32_t processorCount = num_online_cpus();
 
-    // Zero allocate guest state (virtual cpu state) array
-    g_GuestState = kzalloc(sizeof(VIRTUAL_CPU_STATE) * processorCount, GFP_NOWAIT);
+    VmmState = kzalloc(sizeof(VMM_STATE), GFP_KERNEL);
+    pr_info("vmm state allocated");
 
-    pr_info("Allocated guest state memory for %d processors", processorCount);
-    pr_info("g_GuestState address: 0x%llx", g_GuestState);
+    VmmState->GuestCPUs = kzalloc(sizeof(GUEST_CPU_STATE) * processorCount, GFP_KERNEL);
+    pr_info("zero allocated memory for %d guest cpus", processorCount);
 
-    // free guest state
-    kfree(g_GuestState);
-    pr_info("freed guest state");
+    on_each_cpu(InitSingleCpuEntry, VmmState, true);
+    // Guest will resume here only if it fails.
+
 
     // Allocate vmx on and vmcs regions on all cpu's
-    on_each_cpu((void*)AllocateVMRegionOnAllCPU, NULL, true);
+    //on_each_cpu((void*)AllocateVMRegionOnAllCPU, g_VMMState, true);
 
     // messing around
 
@@ -55,13 +62,16 @@ bool ShutdownVMM(void)
     cpu = get_cpu();
     put_cpu();
 
-    // disable vmx in cr4
-    CR4 cr4;
-    cr4.AsUInt = _readcr4();
-    cr4.VmxEnable = false;
-    _writecr4(cr4.AsUInt);
+    // Disable VMX operation on all CPU's
+    on_each_cpu((void*)CpuDisableVmxOperation, NULL, true);
 
     pr_info("vmx operation disabled on cpuid %d", cpu);
+
+    // Free guest cpu memory
+    kfree(g_VMMState->GuestCPUs);
+
+    // Free vmm state
+    kfree(g_VMMState);
 
     return true;
 }
@@ -76,99 +86,56 @@ void testFunc(void)
 
     //pr_info("GuestState[%d] address: 0x%llx", cpu, g_GuestState);
 
-    VIRTUAL_CPU_STATE* currentCpu = &g_GuestState[cpu];
+    //VIRTUAL_CPU_STATE* currentCpu = &g_VMMContext[cpu];
 
-    pr_info("GuestState[%d] address: 0x%llx", cpu, currentCpu);
+    //pr_info("GuestState[%d] address: 0x%llx", cpu, currentCpu);
 
-    currentCpu->VmcsRegionPhysicalAddress = 0xFFFFFFFF;
+    //currentCpu->VmcsRegionPhysicalAddress = 0xFFFFFFFF;
 
-    put_cpu(); // Don't forget this!
+    //put_cpu(); // Don't forget this!
 }
 
 //
-/// @brief Check if the cpu supports the features required by this hypervisor.
+// Called from asm, ran on every cpu
 //
-bool CheckCPUFeatures(void)
+void InitSingleCPU(void* info, u64 ip, u64 sp, u64 flags)
 {
-    CPUID_EAX_01 cpu = { 0 };
+    uint32_t current_cpu = smp_processor_id();
+    GUEST_CPU_STATE* vcpu = &((VMM_STATE*)info)->GuestCPUs[current_cpu];
 
-    // Run the cpuid instruction
-    __get_cpuid(1, &cpu.CpuidVersionInformation.AsUInt,
-        &cpu.CpuidAdditionalInformation.AsUInt,
-        &cpu.CpuidFeatureInformationEcx.AsUInt,
-        &cpu.CpuidFeatureInformationEdx.AsUInt);
+    //pr_info("guest will resume to %p with rsp=%llx on fail\n", (void*)ip, sp);
 
-    // bit 31 of ecx = hypervisor present bit
-    
-    if (cpu.CpuidFeatureInformationEcx.VirtualMachineExtensions == 0) 
-    {
-        pr_info("VMX is not supported on your processor.");
-        return false;
-    }
+    CpuEnableVmxOperation();
 
-    // Load feature control register
-    IA32_FEATURE_CONTROL_REGISTER Control = { 0 };
-    Control.AsUInt = _readmsr(IA32_FEATURE_CONTROL);
-
-    pr_info("Lock Bit: %d", Control.LockBit);
-    pr_info("EnableVmxInsideSmx: %d", Control.EnableVmxInsideSmx);
-    pr_info("EnableVmxOutsideSmx: %d", Control.EnableVmxOutsideSmx);
-
-    // BIOS lock checking
-    if (Control.LockBit == 0) // Check if lock exists
-    {
-        Control.LockBit = true;
-        Control.EnableVmxInsideSmx = true; 
-
-        // Write the MSR with lock bit set to 1 and EnableVmxInsideSmx to 1
-        _writemsr(IA32_FEATURE_CONTROL, Control.AsUInt);
-    }
-    else
-    {
-        pr_err_once("VMX locked off in BIOS");
-        return false;
-    }
-    
-    return true;
-}
-
-void AllocateVMRegionOnAllCPU()
-{
-    uint32_t current_cpu = get_cpu();
-    put_cpu();
-
-    //pr_info("currently executing in logical processor %d", current_cpu);
-
-    // Enable VMX Operation - TODO: Own function
-    CR4 cr4;
-    cr4.AsUInt = _readcr4();
-    cr4.VmxEnable = true;
-
-    _writecr4(cr4.AsUInt);
-
-    pr_info("vmx operation enabled on cpuid %d", current_cpu);
+    //pr_info("vmx operation enabled on cpuid %d", current_cpu);
 
     // Adjust control register bits
     AdjustCR4AndCr0Bits();
 
     // Allocate vm regions
-
-    uint32_t revisionId = _readmsr(IA32_VMX_BASIC);
-
     void* vmxon_region = kzalloc(4096, GFP_KERNEL);
-   	if(vmxon_region==NULL){
 
+   	if(vmxon_region == NULL)
+    {
 		printk(KERN_INFO "Error allocating vmxon region\n");
+        // vmm_state->last_error = 0;
         return;
-      	//return false;
    	}
 
     long vmxon_phy_region = __pa(vmxon_region);
+    uint32_t revisionId = _readmsr(IA32_VMX_BASIC);
+
     *(uint32_t *)vmxon_region = revisionId; // set revision id
 
-    pr_info("vmxon_region virt: %llx, phys: %llx", vmxon_region, vmxon_phy_region);
+    // set vm regions
+    vcpu->VmxonRegionPhysicalAddress = vmxon_phy_region;
+    vcpu->VmxonRegionVirtualAddress = vmxon_region;
 
-    // GP here because lockbit is set
+    pr_info("vcpu[%d] vmxon_region virt: %llx, phys: %llx",
+        current_cpu, vmxon_region, vmxon_phy_region);
+
+    // allocate vmcs regions
+    
     /*
     if (_vmxon(vmxon_phy_region)) 
     {
@@ -180,8 +147,7 @@ void AllocateVMRegionOnAllCPU()
     }
     */
 
-    kfree(vmxon_region);
-    pr_info("Freed vmx on region");
+    
 
     //return true;
 }

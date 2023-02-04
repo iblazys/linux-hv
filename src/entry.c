@@ -14,6 +14,7 @@ int init_module(void)
     if(!InitVMM())
     {
         pr_info("hypervisor failed to load");
+        return 0;
     }
 
     /* A non 0 return means init_module failed; module can't be loaded. */ 
@@ -26,7 +27,9 @@ void cleanup_module(void)
 { 
     pr_info("hypervisor unloading.\n");
 
-    on_each_cpu((void*)ShutdownVMM, NULL, true);
+    // temp
+    //ShutdownVMM();
+    //on_each_cpu((void*)ShutdownVMM, NULL, true);
 
     pr_info("hypervisor unloaded.\n");
 } 

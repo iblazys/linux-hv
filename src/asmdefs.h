@@ -1,6 +1,34 @@
 #ifndef LINUXHV_ASMDEFS_H
 #define LINUXHV_ASMDEFS_H
 
+#include <asm/msr.h>
+#include <cpuid.h>
+
+extern void InitSingleCpuEntry(void*);
+
+struct GUEST_REGISTERS 
+{
+    // TODO: invert the order
+    
+    u64 r15;
+    u64 r14;
+    u64 r13;
+    u64 r12;
+    u64 r11;
+    u64 r10;
+    u64 r9;
+    u64 r8;
+    u64 rdi;
+    u64 rsi;
+    u64 rdx;
+    u64 rcx;
+    u64 rbx;
+    u64 rax;
+    /* RSP must be read from the VMCS within the vmexit handler. */
+    u64 _padding;
+    u64 rbp;
+} __attribute__((aligned(16)));
+
 static inline int _vmxon(uint64_t phys)
 {
 	uint8_t ret;
