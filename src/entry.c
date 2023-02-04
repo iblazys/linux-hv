@@ -26,6 +26,8 @@ void cleanup_module(void)
 { 
     pr_info("hypervisor unloading.\n");
 
+    on_each_cpu((void*)ShutdownVMM, NULL, true);
+
     pr_info("hypervisor unloaded.\n");
 } 
 
