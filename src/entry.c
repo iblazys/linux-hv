@@ -14,10 +14,10 @@ int init_module(void)
     pr_info("hypervisor loading.\n"); 
     VmmState = VmmInit();
 
-    if(VmmState == -1)
+    if(VmmState == NULL)
     {
         pr_info("hypervisor failed to load");
-        return 0;
+        return 1;
     }
 
     /* A non 0 return means init_module failed; module can't be loaded. */ 
@@ -29,8 +29,8 @@ int init_module(void)
 void cleanup_module(void) 
 { 
     pr_info("hypervisor unloading.\n");
-
-    // make vmm state available here without globals preferably
+    
+    // Temporary for developing, run shutdown on all cpu's
     on_each_cpu((void*)VmmShutdown, VmmState, true);
 
     // Free VMM_STATE and GUEST_CPU states - only call this once

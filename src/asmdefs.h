@@ -143,4 +143,84 @@ static inline void _writemsr(unsigned long __register, unsigned long value)
       __wrmsr(__register, low, high);
 }
 
+static inline uint16_t _getcs(void)   
+{   
+    uint16_t ret;    
+    __asm__ __volatile("movw %%cs, %0" : "=r" (ret));   
+    return ret;
+}
+
+static inline uint16_t _getds(void)   
+{   
+    uint16_t ret;    
+    __asm__ __volatile("movw %%ds, %0" : "=r" (ret));   
+    return ret;
+}
+
+static inline uint16_t _getes(void)   
+{   
+    uint16_t ret;    
+    __asm__ __volatile("movw %%es, %0" : "=r" (ret));   
+    return ret;
+}
+
+static inline uint16_t _getfs(void)   
+{   
+    uint16_t ret;    
+    __asm__ __volatile("movw %%fs, %0" : "=r" (ret));   
+    return ret;
+}
+
+static inline uint16_t _getgs(void)   
+{   
+    uint16_t ret;    
+    __asm__ __volatile("movw %%gs, %0" : "=r" (ret));   
+    return ret;
+}
+
+static inline uint16_t _getss(void)   
+{   
+    uint16_t ret;    
+    __asm__ __volatile("movw %%ss, %0" : "=r" (ret));   
+    return ret;
+}
+
+static inline uint16_t _getldtr(void)   
+{   
+    uint16_t ret;    
+    __asm__ __volatile("sldt %0" : "=r" (ret));   
+    return ret;
+}
+
+static inline uint16_t _gettr(void)   
+{   
+    uint16_t ret;    
+    __asm__ __volatile("str %0" : "=r" (ret));   
+    return ret;
+}
+
+static inline unsigned long __segmentlimit(const unsigned long segreg) 
+{
+  unsigned long retval;
+
+  __asm__ __volatile__(
+        "lsl %[segreg], %[retval]"
+        : [retval] "=r"(retval)
+        : [segreg] "rm"(segreg)
+        );
+        
+  return retval;
+}
+
+static inline void _sgdt(void* gdt)
+{
+    __asm__ __volatile("sgdt %0":"=m" (*gdt));
+}
+
+static inline void _sidt(void* idt)
+{
+    __asm__ __volatile("sidt %0" : "=m" (*idt));
+}
+
+
 #endif

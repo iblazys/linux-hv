@@ -7,9 +7,11 @@
 bool VmcsInitRegion(GUEST_CPU_STATE* vcpu); // VmcsInitRegion
 bool VmcsLoad(void);
 bool VmcsClear(void);
+
+void VmcsSetup(void);
 void VmcsSetupControls(void);
-void VmcsSetupHost(void);
 void VmcsSetupGuest(void);
+void VmcsSetupHost(void);
 
 IA32_VMX_BASIC_REGISTER GetBasicControls(void);
 void AdjustControlBits(UINT32 CapabilityMSR, UINT64* Value);

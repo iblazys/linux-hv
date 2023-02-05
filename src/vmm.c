@@ -28,31 +28,28 @@ VMM_STATE* VmmInit(void)
     if(!CpuHasVmxSupport()) 
     {
         // Handled by above function. 
-        return -1;
+        return NULL;
     }
-
-    pr_info("vMX support detected");
 
     // Allocate state memory - move to an InitVmmState function or something
     int32_t processorCount = num_online_cpus();
 
-    VmmState = kzalloc(sizeof(VMM_STATE), GFP_KERNEL);
-    pr_info("vmm state allocated");
+    if(!(VmmState = kzalloc(sizeof(VMM_STATE), GFP_KERNEL)))
+    {
+        pr_err("failed to allocate vmm state");
+        return NULL;
+    }
 
-    VmmState->GuestCPUs = kzalloc(sizeof(GUEST_CPU_STATE) * processorCount, GFP_KERNEL);
-    pr_info("zero allocated memory for %d guest cpus", processorCount);
+    if(!(VmmState->GuestCPUs = kzalloc(sizeof(GUEST_CPU_STATE) * processorCount, GFP_KERNEL)))
+    {
+        pr_err("failed to allocate guest cpu states");
+        kfree(VmmState);
+        return NULL;
+    }
 
     on_each_cpu(InitSingleCpuEntry, VmmState, true);
-    // Guest will resume here only if it fails.
 
-
-    // Allocate vmx on and vmcs regions on all cpu's
-    //on_each_cpu((void*)AllocateVMRegionOnAllCPU, g_VMMState, true);
-
-    // messing around
-
-    // Is this safe in root mode, I guess I'll find out
-    // on_each_cpu((void*)testFunc, NULL, true);
+    // todo: add number of launched cpus to a vmm state member
 
     return VmmState;
 }
@@ -67,17 +64,18 @@ bool VmmShutdown(void* info)
 
     // Execute vmxoff on all CPU's
     VmxOff();
-    pr_info("vcpu[%d] vmxoff", cpuid);
 
     // Disable VMX operation on all CPU's
     CpuDisableVmxOperation();
-    pr_info("vmx operation disabled on cpuid %d", cpuid);
+    //pr_info("vmx operation disabled on cpuid %d", cpuid);
 
     // Free vmxon region
     kfree(current_vcpu->VmxonRegionVirtualAddress);
 
     // Free vmcs region
     kfree(current_vcpu->VmcsRegionVirtualAddress);
+
+    pr_info("vcpu[%d] vmm shutdown", cpuid);
 
     return true;
 }
@@ -99,11 +97,6 @@ void InitSingleCPU(void* info, u64 ip, u64 sp, u64 flags)
     uint32_t cpuid = smp_processor_id();
     GUEST_CPU_STATE* current_vcpu = &((VMM_STATE*)info)->GuestCPUs[cpuid];
 
-    if(current_vcpu < 0)
-    {
-        pr_info("failed to get vcpu[%d]", cpuid);
-    }
-
     //pr_info("guest will resume to %p with rsp=%llx on fail\n", (void*)ip, sp);
 
     CpuEnableVmxOperation();
@@ -118,43 +111,40 @@ void InitSingleCPU(void* info, u64 ip, u64 sp, u64 flags)
         goto error;
     }
 
-    pr_info("vcpu[%d] vmxon_region virt: %llx, phys: %llx",
-        cpuid, current_vcpu->VmxonRegionVirtualAddress, current_vcpu->VmxonRegionPhysicalAddress);
-
-    
     if(!VmcsInitRegion(current_vcpu))
     {
         // Handled
         goto error;
     }
 
-    pr_info("vcpu[%d] vmcs_region virt: %llx, phys: %llx",
-        cpuid, current_vcpu->VmcsRegionVirtualAddress, current_vcpu->VmcsRegionPhysicalAddress);
+    pr_info("vcpu[%d] init with vmxon_region virt: %llx, phys: %llx",
+        cpuid, current_vcpu->VmxonRegionVirtualAddress, current_vcpu->VmxonRegionPhysicalAddress);
 
     // execute vmx on for current processor
     if(!VmxOn(current_vcpu->VmxonRegionPhysicalAddress)) 
     {
         goto error;
     }
-    
-    pr_info("vcpu[%d] vmxon", cpuid);
-    
+
+    // Clear VMCS
+    // VmcsClear(CurrentVcpu->VmcsRegionPhysicalAddress);
+
+    // Load VMCS
+    // VmcsLoad(CurrentVcpu->VmcsRegionPhysicalAddress)
+
     // Setup VMCS
-    //VmcsSetupControls();
-    //VmcsSetupGuest();
-    //VmcsSetupHost();
+    VmcsSetup(); // pass current cpu to this
+
+    // VMLAUNCH
     
-    /*
-    if (_vmxon(vmxon_phy_region)) 
-    {
-        pr_info("vmxon for processor %d", current_cpu);
-    }
-    else
-    {
-        //return false;
-    }
-    */
+
+
+
+
+
+
 error:
+    current_vcpu->LaunchFailed = true; // todo: check failed launched in InitVmm
     return;
 }
 

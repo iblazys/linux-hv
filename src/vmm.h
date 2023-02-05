@@ -8,7 +8,7 @@
 typedef struct _GUEST_CPU_STATE
 {
     bool IsOnVmxRootMode;
-    bool IncrementRip;
+    bool LaunchFailed;
 
     uint64_t VmxonRegionPhysicalAddress;
     uint64_t VmxonRegionVirtualAddress;

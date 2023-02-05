@@ -29,9 +29,11 @@ bool CpuHasVmxSupport(void)
     Control.AsUInt = _readmsr(IA32_FEATURE_CONTROL);
     //Control.AsUInt = __rdmsr(IA32_FEATURE_CONTROL);
 
+    /*
     pr_info("Lock Bit: %d", Control.LockBit);
     pr_info("EnableVmxInsideSmx: %d", Control.EnableVmxInsideSmx);
     pr_info("EnableVmxOutsideSmx: %d", Control.EnableVmxOutsideSmx);
+    */
 
     // BIOS lock checking
     if (Control.LockBit == 0)
