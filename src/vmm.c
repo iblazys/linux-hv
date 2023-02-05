@@ -40,7 +40,7 @@ VMM_STATE* VmmInit(void)
         return NULL;
     }
 
-    if(!(VmmState->GuestCPUs = kzalloc(sizeof(GUEST_CPU_STATE) * processorCount, GFP_KERNEL)))
+    if(!(VmmState->GuestCPUs = kzalloc(sizeof(VIRTUAL_CPU) * processorCount, GFP_KERNEL)))
     {
         pr_err("failed to allocate guest cpu states");
         kfree(VmmState);
@@ -58,7 +58,7 @@ bool VmmShutdown(void* info)
 {
     uint32_t cpuid = smp_processor_id();
     VMM_STATE* vmm = info;
-    GUEST_CPU_STATE* current_vcpu = &((VMM_STATE*)info)->GuestCPUs[cpuid];
+    VIRTUAL_CPU* current_vcpu = &((VMM_STATE*)info)->GuestCPUs[cpuid];
 
     //pr_info("vcpu[%d] shutting down vm", cpuid);
 
@@ -80,22 +80,35 @@ bool VmmShutdown(void* info)
     return true;
 }
 
+/// @brief 
+/// @param vmmState 
 void VmmDestroy(VMM_STATE* vmmState)
 {
     // Only call this function after the VMM has shutdown.
+    //if(vmmState->IsRunning)
+    // error
 
     kfree(vmmState->GuestCPUs);
     kfree(vmmState);
 }
 
 //
-// Called from asm, ran on every cpu
-// Allocates the memory, enables vmxe in cr4, and sets up the vmcs
+// Allocates the memory, enables vmxe in cr4 
+// sets up the vmcs and calls vmlaunch on 
+// every cpu, called from `InitSingleCpuEntry` in asmdefs.S
 //
-void InitSingleCPU(void* info, u64 ip, u64 sp, u64 flags)
+void VmmVirtualizeSingleCpu(void* info, u64 ip, u64 sp, u64 flags)
 {
     uint32_t cpuid = smp_processor_id();
-    GUEST_CPU_STATE* current_vcpu = &((VMM_STATE*)info)->GuestCPUs[cpuid];
+    VMM_STATE* vmmState = info;
+    VIRTUAL_CPU* currentvCpu = &((VMM_STATE*)info)->GuestCPUs[cpuid];
+
+    currentvCpu->RIP = ip;
+    currentvCpu->RSP = sp;
+    currentvCpu->RFlags = flags;
+
+    currentvCpu->ProcessorId = cpuid;
+    currentvCpu->VmmStatePtr = vmmState;
 
     //pr_info("guest will resume to %p with rsp=%llx on fail\n", (void*)ip, sp);
 
@@ -104,47 +117,59 @@ void InitSingleCPU(void* info, u64 ip, u64 sp, u64 flags)
     // Adjust control register bits
     AdjustCR4AndCr0Bits();
 
+    // Get rid of gotos? meh
+
     // Allocate memory
-    if(!VmxOnInitRegion(current_vcpu)) 
-    {
-        // Handled
-        goto error;
-    }
-
-    if(!VmcsInitRegion(current_vcpu))
-    {
-        // Handled
-        goto error;
-    }
-
-    pr_info("vcpu[%d] init with vmxon_region virt: %llx, phys: %llx",
-        cpuid, current_vcpu->VmxonRegionVirtualAddress, current_vcpu->VmxonRegionPhysicalAddress);
-
-    // execute vmx on for current processor
-    if(!VmxOn(current_vcpu->VmxonRegionPhysicalAddress)) 
+    if(!VmxOnInitRegion(currentvCpu)) 
     {
         goto error;
     }
 
-    // Clear VMCS
-    // VmcsClear(CurrentVcpu->VmcsRegionPhysicalAddress);
+    if(!VmcsInitRegion(currentvCpu))
+    {
+        goto error;
+    }
 
-    // Load VMCS
-    // VmcsLoad(CurrentVcpu->VmcsRegionPhysicalAddress)
+    // execute vmx on the vmcs physical address
+    if(!VmxOn(currentvCpu->VmxonRegionPhysicalAddress)) 
+    {
+        goto error;
+    }
+
+    // Clear VMCS - execute vmclear on the vmcs physical address
+    if(!VmcsClear(currentvCpu->VmcsRegionPhysicalAddress))
+    {
+        goto vmclearFail;
+    }
+
+    // Load VMCS - execute vmptrld on the vmcs physical address
+    if(!VmcsLoad(currentvCpu->VmcsRegionPhysicalAddress))
+    {
+        goto vmloadFail;
+    }
 
     // Setup VMCS
-    VmcsSetup(); // pass current cpu to this
+    VmcsSetup(currentvCpu); // pass current cpu to this and save gdt idt etc
+
+
+    currentvCpu->VmExitHandler = &EntryToVmExit;
+    currentvCpu->LaunchFailed = false;
 
     // VMLAUNCH
-    
+    pr_info("Ready to launch vm");
 
 
 
 
-
-
+vmloadFail:
+vmclearFail:
+    currentvCpu->LaunchFailed = true;
+    // turn off vmx for failed processor
+    // have to change ShutdownVMM to detect failed processors before we can do that
+    // see below comment
 error:
-    current_vcpu->LaunchFailed = true; // todo: check failed launched in InitVmm
+    currentvCpu->LaunchFailed = true; 
+    // todo: check failed launched in InitVmm and ShutdownVMM
     return;
 }
 
@@ -157,10 +182,10 @@ void AdjustCR4AndCr0Bits(void)
     //
     // Fix Cr0
     //
-    CrFixed.Flags = _readmsr(IA32_VMX_CR0_FIXED0);
-    Cr0.AsUInt = _readcr0();
+    CrFixed.Flags = __readmsr(IA32_VMX_CR0_FIXED0);
+    Cr0.AsUInt = __readcr0();
     Cr0.AsUInt |= CrFixed.Fields.Low;
-    CrFixed.Flags = _readmsr(IA32_VMX_CR0_FIXED1);
+    CrFixed.Flags = __readmsr(IA32_VMX_CR0_FIXED1);
     Cr0.AsUInt &= CrFixed.Fields.Low;
 
     _writecr0(Cr0.AsUInt);
@@ -168,10 +193,10 @@ void AdjustCR4AndCr0Bits(void)
     //
     // Fix Cr4
     //
-    CrFixed.Flags = _readmsr(IA32_VMX_CR4_FIXED0);
-    Cr4.AsUInt = _readcr4();
+    CrFixed.Flags = __readmsr(IA32_VMX_CR4_FIXED0);
+    Cr4.AsUInt = __readcr4();
     Cr4.AsUInt |= CrFixed.Fields.Low;
-    CrFixed.Flags = _readmsr(IA32_VMX_CR4_FIXED1);
+    CrFixed.Flags = __readmsr(IA32_VMX_CR4_FIXED1);
     Cr4.AsUInt &= CrFixed.Fields.Low;
 
     _writecr4(Cr4.AsUInt);

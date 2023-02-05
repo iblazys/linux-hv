@@ -1,5 +1,5 @@
 obj-m += linuxvisor.o
-linuxvisor-objs := ../src/entry.o ../src/vmm.o ../src/arch.o ../src/asmdefs.o ../src/vmx.o ../src/vmcs.o
+linuxvisor-objs := ../src/entry.o ../src/vmm.o ../src/arch.o ../src/asmdefs.o ../src/vmx.o ../src/vmcs.o ../src/exit.o
 
 # Set PWD to the current directory
 PWD := $(CURDIR) 

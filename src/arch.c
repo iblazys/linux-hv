@@ -26,7 +26,7 @@ bool CpuHasVmxSupport(void)
 
     // Load feature control register
     IA32_FEATURE_CONTROL_REGISTER Control = { 0 };
-    Control.AsUInt = _readmsr(IA32_FEATURE_CONTROL);
+    Control.AsUInt = __readmsr(IA32_FEATURE_CONTROL);
     //Control.AsUInt = __rdmsr(IA32_FEATURE_CONTROL);
 
     /*

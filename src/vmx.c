@@ -5,7 +5,7 @@
 #include "../ia32-doc/out/ia32.h"
 #include "asmdefs.h"
 
-bool VmxOnInitRegion(GUEST_CPU_STATE* vcpu) 
+bool VmxOnInitRegion(VIRTUAL_CPU* vcpu) 
 {
     void* vmxon_region = kzalloc(PAGE_SIZE, GFP_KERNEL);
     //pr_info("vmxon region: %p", vmxon_region);
@@ -17,7 +17,7 @@ bool VmxOnInitRegion(GUEST_CPU_STATE* vcpu)
    	}
 
     long vmxon_phy_region = __pa(vmxon_region);
-    uint32_t revisionId = _readmsr(IA32_VMX_BASIC);
+    uint32_t revisionId = __readmsr(IA32_VMX_BASIC);
 
     // set the first 30 bits to the revision id
     *(uint32_t *)vmxon_region = revisionId; 
@@ -32,7 +32,7 @@ bool VmxOn(void *vmxon_phys)
 {
     int status;
     
-    status = _vmxon(vmxon_phys);
+    status = __vmx_on(vmxon_phys);
 
     if(status) 
     {
@@ -45,7 +45,7 @@ bool VmxOn(void *vmxon_phys)
 
 void VmxOff()
 {   
-    _vmxoff(); // maybe move error handling to this function
+    __vmx_off(); // maybe move error handling to this function
 }
 
 // Free region

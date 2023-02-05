@@ -1,7 +1,8 @@
 #include <linux/linkage.h>
 #include <asm/export.h>
 
-.extern InitSingleCPU
+.extern VmmVirtualizeSingleCpu
+.extern ExitVmExitHandler
 
 // https://github.com/birb007/sauron/blob/3b2188963ec07a53af421ddc6130e423fee3e6dd/src/vmxasm.S
 
@@ -57,7 +58,7 @@ SYM_FUNC_START(InitSingleCpuEntry)
 	// %rdx contains the original sp for VMX guest.
 	// %rcx contains the original flags for VMX guest.
 	subq $0x20, %rsp
-	call InitSingleCPU
+	call VmmVirtualizeSingleCpu
 	addq $0x20, %rsp
 	jmp .vmx_guest_resume
 .vmx_guest_resume:
@@ -69,3 +70,31 @@ SYM_FUNC_START(InitSingleCpuEntry)
 	ret
 SYM_FUNC_END(InitSingleCpuEntry)
 EXPORT_SYMBOL(InitSingleCpuEntry)
+
+// VM-exit entry point
+SYM_FUNC_START(EntryToVmExit)
+	store_cpu_state
+	movq 0x80(%rsp), %rdi
+	movq %rsp, %rsi
+	// %rdi contains the cpu_ctx pointer at the top of the stack
+	// which store_cpu_state moves by 0x80 bytes.
+	// %rsi contains a pointer to a hv_exit_state instance.
+	subq $0x20, %rsp
+	call ExitVmExitHandler
+	addq $0x20, %rsp
+
+	test %al, %al
+	jnz .failure
+
+	restore_cpu_state
+	VMRESUME
+	// If VMRESUME does not succeed then attempt to handle error.
+	jmp .failure
+.failure:
+	// TODO implement VMRESUME error handler
+	jmp .critical_failure
+.critical_failure:
+	hlt
+	jmp .critical_failure
+SYM_FUNC_END(EntryToVmExit)
+EXPORT_SYMBOL(EntryToVmExit)

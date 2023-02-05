@@ -1,12 +1,17 @@
 #ifndef LINUXHV_ASMDEFS_H
 #define LINUXHV_ASMDEFS_H
 
+#ifndef __linux__
+#include <ntddk.h> // for future windows integration
+#else
+
 #include <asm/msr.h>
 #include <cpuid.h>
 
-extern void InitSingleCpuEntry(void*);
+extern void InitSingleCpuEntry(void*); // asmdefs.S
+extern void* EntryToVmExit; // asmdefs.S
 
-struct GUEST_REGISTERS 
+struct _GUEST_REGISTERS 
 {
     // TODO: invert the order
     
@@ -29,7 +34,9 @@ struct GUEST_REGISTERS
     u64 rbp;
 } __attribute__((aligned(16)));
 
-static inline int _vmxon(uint64_t phys)
+typedef struct _GUEST_REGISTERS GUEST_REGISTERS;
+
+static inline int __vmx_on(uint64_t phys)
 {
 	uint8_t ret;
 
@@ -42,7 +49,7 @@ static inline int _vmxon(uint64_t phys)
 	return ret;
 }
 
-static inline uint8_t _vmxoff(void)
+static inline uint8_t __vmx_off(void)
 {
     uint8_t cf = 0;
     uint8_t zf = 0;
@@ -67,6 +74,48 @@ static inline uint8_t _vmxoff(void)
     return cf | zf;
 }
 
+static inline uint8_t __vmx_vmclear(void* vmcsRegionPtr)
+{
+    uint8_t ret;
+
+    asm volatile(
+        "vmclear %[vmcsRegionPtr]\n"
+        "setb %[ret]\n"
+        : [ ret ] "=rm"(ret)
+        : [ vmcsRegionPtr ] "m"(vmcsRegionPtr)
+        : "cc", "memory");
+
+	return ret;
+}
+
+static inline uint8_t __vmx_vmptrld(void* vmcsRegionPtr)
+{
+    uint8_t ret;
+
+    __asm__ __volatile__(
+        "vmptrld %[vmcsRegionPtr]\n"
+        "setb %[ret]\n"
+        : [ ret ] "=rm"(ret)
+        : [ vmcsRegionPtr ] "m"(vmcsRegionPtr)
+        : "cc", "memory"
+    );
+        
+    return ret;
+}
+
+static inline uint8_t __vmx_vmlaunch(void)
+{
+    u8 err;
+
+    asm volatile(
+        "vmlaunch\n"
+        "setb %[err]\n"
+        : [ err ] "=rm"(err)::"cc", "memory"
+    );
+
+    return err;
+}
+
 static inline uint8_t __vmx_vmwrite(unsigned long field, unsigned long value) 
 {
     uint8_t ret;
@@ -81,12 +130,25 @@ static inline uint8_t __vmx_vmwrite(unsigned long field, unsigned long value)
     return ret;
 }
 
-static inline uint64_t _readcr0(void)
+static inline uint64_t __readcr0(void)
 {
     uint64_t ret;
 
     __asm__ __volatile__(
         "mov %%cr0, %0"
+        : "=r"(ret)
+        : : "memory"
+        );
+
+    return ret;
+}
+
+static inline uint64_t __readcr3(void)
+{
+    uint64_t ret;
+
+    __asm__ __volatile__(
+        "mov %%cr3, %0"
         : "=r"(ret)
         : : "memory"
         );
@@ -103,7 +165,7 @@ static inline void _writecr0(uint64_t cr0)
         );
 }
 
-static inline uint64_t _readcr4(void)
+static inline uint64_t __readcr4(void)
 {
     uint64_t ret;
 
@@ -125,7 +187,7 @@ static inline void _writecr4(uint64_t cr4)
         );
 }
 
-static inline uint64_t _readmsr(unsigned long __register)
+static inline uint64_t __readmsr(unsigned long __register)
 {
   unsigned long __edx;
   unsigned long __eax;
@@ -141,6 +203,18 @@ static inline void _writemsr(unsigned long __register, unsigned long value)
       unsigned int high = value >> 32;
 
       __wrmsr(__register, low, high);
+}
+
+static inline uint64_t __load_ar(uint16_t selector)
+{
+    uint64_t ret;
+
+	__asm__ __volatile__(
+        "lar %1, %0"
+        : "=r" (ret)
+        : "r" (selector));
+
+    return ret;
 }
 
 static inline uint16_t _getcs(void)   
@@ -222,5 +296,5 @@ static inline void _sidt(void* idt)
     __asm__ __volatile("sidt %0" : "=m" (*idt));
 }
 
-
-#endif
+#endif // __linux__
+#endif // LINUXHV_ASMDEFS_H
