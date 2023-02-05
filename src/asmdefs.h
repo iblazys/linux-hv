@@ -42,12 +42,43 @@ static inline int _vmxon(uint64_t phys)
 	return ret;
 }
 
-static inline void _vmxoff(void)
+static inline uint8_t _vmxoff(void)
 {
-    asm volatile (
+    uint8_t cf = 0;
+    uint8_t zf = 0;
+
+    /* Takes the logical processor out of VMX operation. If VMXON failed with an
+     * invalid VMCS, CF is set. Otherwise, ZF is set and the error field in the
+     * VMCS is set. */
+
+    asm volatile(
         "vmxoff\n"
-        : : : "cc"
-        );
+        "setb %[cf]\n"
+        "setz %[zf]\n"
+        : [ cf ] "=rm"(cf), [ zf ] "=rm"(zf)::"cc", "memory"
+    );
+
+    if (zf) 
+    { 
+        pr_err("VMXOFF failed"); // todo: read error
+        return 1;
+    }
+
+    return cf | zf;
+}
+
+static inline uint8_t __vmx_vmwrite(unsigned long field, unsigned long value) 
+{
+    uint8_t ret;
+
+    asm volatile(
+        "vmwrite %[value], %[field]\n"
+        "setb %[ret]\n"
+        : [ ret ] "=rm"(ret)
+        : [ value ] "r"(value), [ field ] "rm"(field)
+        : "cc", "memory");
+
+    return ret;
 }
 
 static inline uint64_t _readcr0(void)

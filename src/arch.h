@@ -7,4 +7,4 @@ bool CpuHasVmxSupport(void);
 bool CpuEnableVmxOperation(void);
 bool CpuDisableVmxOperation(void);
 
-#endif;
+#endif

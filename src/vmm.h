@@ -41,8 +41,10 @@ typedef union _CR_FIXED
 
 extern GUEST_CPU_STATE* g_VMMContext;
 
-bool InitVMM(void); 
-bool ShutdownVMM(void);
+VMM_STATE* VmmInit(void); 
+bool VmmShutdown(void* info);
+
+void VmmDestroy(VMM_STATE* vmmState);
 
 void InitSingleCPU(void* info, u64 ip, u64 sp, u64 flags);
 

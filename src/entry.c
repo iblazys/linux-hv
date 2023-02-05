@@ -7,11 +7,14 @@
 
 #include "vmm.h"
 
+static VMM_STATE* VmmState;
+
 int init_module(void) 
 { 
     pr_info("hypervisor loading.\n"); 
-    
-    if(!InitVMM())
+    VmmState = VmmInit();
+
+    if(VmmState == -1)
     {
         pr_info("hypervisor failed to load");
         return 0;
@@ -27,9 +30,11 @@ void cleanup_module(void)
 { 
     pr_info("hypervisor unloading.\n");
 
-    // temp
-    //ShutdownVMM();
-    //on_each_cpu((void*)ShutdownVMM, NULL, true);
+    // make vmm state available here without globals preferably
+    on_each_cpu((void*)VmmShutdown, VmmState, true);
+
+    // Free VMM_STATE and GUEST_CPU states - only call this once
+    VmmDestroy(VmmState);
 
     pr_info("hypervisor unloaded.\n");
 } 
