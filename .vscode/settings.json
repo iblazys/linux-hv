@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "vmm.h": "c",
+        "kernel.h": "c",
+        "*.tcc": "c",
+        "slab.h": "c",
+        "x86.h": "c"
+    },
+    "C_Cpp.errorSquiggles": "disabled"
+}

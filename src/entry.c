@@ -7,22 +7,31 @@
 
 #include "vmm.h"
 
-static VMM_STATE* VmmState;
+static struct vmm_state* vmm_state;
 
 int init_module(void) 
 { 
     pr_info("hypervisor loading.\n"); 
-    VmmState = VmmInit();
 
-    if(VmmState == NULL)
+    vmm_state = vmm_init();
+
+    if(!vmm_state)
     {
-        pr_info("hypervisor failed to load");
-        return 1;
+        pr_err("hypervisor failed to load");
     }
 
-    /* A non 0 return means init_module failed; module can't be loaded. */ 
     pr_info("hypervisor loaded.\n");
 
+
+    // DEBUG 
+    pr_info("shutting down hypervisor");
+    vmm_shutdown(vmm_state);
+   
+    pr_info("hypervisor shutdown successfully");
+    // DEBUG
+
+
+    /* A non 0 return means init_module failed; module can't be loaded. */
     return 0; 
 } 
 
@@ -31,10 +40,10 @@ void cleanup_module(void)
     pr_info("hypervisor unloading.\n");
     
     // Temporary for developing, run shutdown on all cpu's
-    on_each_cpu((void*)VmmShutdown, VmmState, true);
+    //on_each_cpu((void*)vmm_shutdown, VmmState, true);
 
     // Free VMM_STATE and GUEST_CPU states - only call this once
-    VmmDestroy(VmmState);
+    //vmm_shutdown(vmm_state);
 
     pr_info("hypervisor unloaded.\n");
 } 

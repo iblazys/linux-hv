@@ -1,203 +1,144 @@
-/* 
- * vmm.c - our virtual machine manager
- */
 #include "vmm.h"
-
-#include <linux/kernel.h>
-#include <linux/slab.h> // kalloc
-#include <linux/gfp.h> // kalloc flags
-#include <linux/vmalloc.h> // vmalloc
-#include <linux/smp.h>     // get_cpu(), put_cpu()
-
-#include <asm/msr.h> // rdmsr testing
-#include <cpuid.h> // cpuid intrinsic
-
-#include "arch.h"
-#include "../ia32-doc/out/ia32.h" //
-#include "asmdefs.h"
+#include "cpu.h"
 #include "vmx.h"
 #include "vmcs.h"
 
-// this doesnt need to be global anymore
-//GUEST_CPU_STATE* g_VMMContext;
+struct vmm_state* vmm_init(void)
+{
+    struct vmm_state* vmm;
+    unsigned int processorCount;
 
-VMM_STATE* VmmInit(void)
+    // Check vmx support
+    if(!cpu_supports_vmx())
+    {
+        // Handled
+        return NULL;
+    }
+
+    processorCount = num_online_cpus();
+
+    if(!(vmm = vmm_allocate_vmm_state()))
+    {
+        pr_err("Failed to allocate vmm state");
+        return NULL;
+    }
+
+    if(!(vmm->guest_cpus = vmm_allocate_virtual_cpus(processorCount)))
+    {
+        pr_err("Failed to allocate guest cpus");
+        vmm_free_vmm_state(vmm);
+        return NULL;
+    }
+
+    // Set state
+    vmm->number_of_cpus = processorCount;
+
+    // Initialize each cpu
+    on_each_cpu(vmm_virtualize_single_cpu, vmm, true);
+
+    vmm->init_status = true;
+
+    return vmm;
+}
+
+//
+struct vmm_state* vmm_allocate_vmm_state(void)
 {   
-    VMM_STATE* VmmState;
+    struct vmm_state* vmm;
 
-    if(!CpuHasVmxSupport()) 
-    {
-        // Handled by above function. 
-        return NULL;
-    }
+    vmm = kzalloc(sizeof(struct vmm_state), GFP_KERNEL);
 
-    // Allocate state memory - move to an InitVmmState function or something
-    int32_t processorCount = num_online_cpus();
-
-    if(!(VmmState = kzalloc(sizeof(VMM_STATE), GFP_KERNEL)))
-    {
-        pr_err("failed to allocate vmm state");
-        return NULL;
-    }
-
-    if(!(VmmState->GuestCPUs = kzalloc(sizeof(VIRTUAL_CPU) * processorCount, GFP_KERNEL)))
-    {
-        pr_err("failed to allocate guest cpu states");
-        kfree(VmmState);
-        return NULL;
-    }
-
-    on_each_cpu(InitSingleCpuEntry, VmmState, true);
-
-    // todo: add number of launched cpus to a vmm state member
-
-    return VmmState;
-}
-
-bool VmmShutdown(void* info)
-{
-    uint32_t cpuid = smp_processor_id();
-    VMM_STATE* vmm = info;
-    VIRTUAL_CPU* current_vcpu = &((VMM_STATE*)info)->GuestCPUs[cpuid];
-
-    //pr_info("vcpu[%d] shutting down vm", cpuid);
-
-    // Execute vmxoff on all CPU's
-    VmxOff();
-
-    // Disable VMX operation on all CPU's
-    CpuDisableVmxOperation();
-    //pr_info("vmx operation disabled on cpuid %d", cpuid);
-
-    // Free vmxon region
-    kfree(current_vcpu->VmxonRegionVirtualAddress);
-
-    // Free vmcs region
-    kfree(current_vcpu->VmcsRegionVirtualAddress);
-
-    pr_info("vcpu[%d] vmm shutdown", cpuid);
-
-    return true;
-}
-
-/// @brief 
-/// @param vmmState 
-void VmmDestroy(VMM_STATE* vmmState)
-{
-    // Only call this function after the VMM has shutdown.
-    //if(vmmState->IsRunning)
-    // error
-
-    kfree(vmmState->GuestCPUs);
-    kfree(vmmState);
+    return vmm;
 }
 
 //
-// Allocates the memory, enables vmxe in cr4 
-// sets up the vmcs and calls vmlaunch on 
-// every cpu, called from `InitSingleCpuEntry` in asmdefs.S
-//
-void VmmVirtualizeSingleCpu(void* info, u64 ip, u64 sp, u64 flags)
+struct virtual_cpu* vmm_allocate_virtual_cpus(uint32_t num_of_cpus)
 {
-    uint32_t cpuid = smp_processor_id();
-    VMM_STATE* vmmState = info;
-    VIRTUAL_CPU* currentvCpu = &((VMM_STATE*)info)->GuestCPUs[cpuid];
+    struct virtual_cpu* guest_cpu;
 
-    currentvCpu->RIP = ip;
-    currentvCpu->RSP = sp;
-    currentvCpu->RFlags = flags;
+    guest_cpu = kzalloc(sizeof(struct virtual_cpu) * num_of_cpus, GFP_KERNEL);
 
-    currentvCpu->ProcessorId = cpuid;
-    currentvCpu->VmmStatePtr = vmmState;
-
-    //pr_info("guest will resume to %p with rsp=%llx on fail\n", (void*)ip, sp);
-
-    CpuEnableVmxOperation();
-
-    // Adjust control register bits
-    AdjustCR4AndCr0Bits();
-
-    // Get rid of gotos? meh
-
-    // Allocate memory
-    if(!VmxOnInitRegion(currentvCpu)) 
-    {
-        goto error;
-    }
-
-    if(!VmcsInitRegion(currentvCpu))
-    {
-        goto error;
-    }
-
-    // execute vmx on the vmcs physical address
-    if(!VmxOn(currentvCpu->VmxonRegionPhysicalAddress)) 
-    {
-        goto error;
-    }
-
-    // Clear VMCS - execute vmclear on the vmcs physical address
-    if(!VmcsClear(currentvCpu->VmcsRegionPhysicalAddress))
-    {
-        goto vmclearFail;
-    }
-
-    // Load VMCS - execute vmptrld on the vmcs physical address
-    if(!VmcsLoad(currentvCpu->VmcsRegionPhysicalAddress))
-    {
-        goto vmloadFail;
-    }
-
-    // Setup VMCS
-    VmcsSetup(currentvCpu); // pass current cpu to this and save gdt idt etc
-
-
-    currentvCpu->VmExitHandler = &EntryToVmExit;
-    currentvCpu->LaunchFailed = false;
-
-    // VMLAUNCH
-    pr_info("Ready to launch vm");
-
-
-
-
-vmloadFail:
-vmclearFail:
-    currentvCpu->LaunchFailed = true;
-    // turn off vmx for failed processor
-    // have to change ShutdownVMM to detect failed processors before we can do that
-    // see below comment
-error:
-    currentvCpu->LaunchFailed = true; 
-    // todo: check failed launched in InitVmm and ShutdownVMM
-    return;
+    return guest_cpu;
 }
 
-void AdjustCR4AndCr0Bits(void)
+void vmm_virtualize_single_cpu(void* info)
 {
-    CR_FIXED CrFixed = { 0 };
-    CR4      Cr4 = { 0 };
-    CR0      Cr0 = { 0 };
+    unsigned int processor_id = smp_processor_id();
 
-    //
-    // Fix Cr0
-    //
-    CrFixed.Flags = __readmsr(IA32_VMX_CR0_FIXED0);
-    Cr0.AsUInt = __readcr0();
-    Cr0.AsUInt |= CrFixed.Fields.Low;
-    CrFixed.Flags = __readmsr(IA32_VMX_CR0_FIXED1);
-    Cr0.AsUInt &= CrFixed.Fields.Low;
+    struct vmm_state* vmm = info;
+    struct virtual_cpu* vcpu = &vmm->guest_cpus[processor_id];
+    vcpu->processor_id = processor_id;
 
-    _writecr0(Cr0.AsUInt);
+    pr_info("virtualizing processor %d", vcpu->processor_id);
 
-    //
-    // Fix Cr4
-    //
-    CrFixed.Flags = __readmsr(IA32_VMX_CR4_FIXED0);
-    Cr4.AsUInt = __readcr4();
-    Cr4.AsUInt |= CrFixed.Fields.Low;
-    CrFixed.Flags = __readmsr(IA32_VMX_CR4_FIXED1);
-    Cr4.AsUInt &= CrFixed.Fields.Low;
+    cpu_enable_vmx_operation();
 
-    _writecr4(Cr4.AsUInt);
+    vmx_adjust_control_registers();
+
+    if(!vmx_allocate_vmxon_region(vcpu))
+    {
+        vcpu->launch_failed = true;
+
+        return;
+    }
+
+    if(!vmcs_allocate_vmcs_region(vcpu))
+    {
+        vmx_free_vmxon_region(vcpu);
+        vcpu->launch_failed = true;
+
+        return;
+    }
+
+    if(!vmx_vmxon((void*)vcpu->vmxon_region_phys))
+    {
+        vmx_free_vmxon_region(vcpu);
+        vmcs_free_vmcs_region(vcpu);
+
+        vcpu->launch_failed = true;
+
+        return;
+    }
+
+    pr_info("vmx enabled on cpu %d", vcpu->processor_id);
+}
+
+//
+void vmm_free_vmm_state(struct vmm_state* vmm)
+{
+    kfree(vmm);
+}
+
+//
+void vmm_free_virtual_cpus(struct vmm_state* vmm)
+{
+    kfree(vmm->guest_cpus);
+}
+
+void vmm_shutdown_cpu_shim(struct vmm_state* vmm)
+{
+    struct virtual_cpu* vcpu = &vmm->guest_cpus[smp_processor_id()];
+
+    pr_info("shutting down vm on cpu: %d", vcpu->processor_id);
+
+    if(vcpu->launch_failed)
+    {
+        // vcpu already freed if launch failed
+        // see vmm_virtualize_single_cpu...
+        return;
+    }
+    
+    // todo: turn vmx off etc
+
+    vmx_free_vmxon_region(vcpu);
+    vmcs_free_vmcs_region(vcpu);
+}
+
+//
+void vmm_shutdown(struct vmm_state* vmm)
+{
+    on_each_cpu((void*)vmm_shutdown_cpu_shim, vmm, true);
+
+    // free guest state
+    // free vmm
 }
