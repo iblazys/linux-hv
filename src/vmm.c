@@ -61,6 +61,19 @@ struct virtual_cpu* vmm_allocate_virtual_cpus(uint32_t num_of_cpus)
     return guest_cpu;
 }
 
+int vmm_allocate_saved_state(struct virtual_cpu* vcpu)
+{
+    vcpu->saved_state = kzalloc(sizeof(struct cpu_saved_state), GFP_KERNEL);
+
+    if(!vcpu->saved_state)
+    {   
+        pr_err("Failed to allocate vcpu saved state");
+        return 0;
+    }
+
+    return 1;
+}
+
 void vmm_virtualize_single_cpu(void* info)
 {
     unsigned int processor_id = smp_processor_id();
@@ -71,14 +84,22 @@ void vmm_virtualize_single_cpu(void* info)
 
     pr_info("virtualizing processor %d", vcpu->processor_id);
 
+    // enable vmx operation in cr4
     cpu_enable_vmx_operation();
 
+    // adjust control register fixed bits
+    // todo: save original registers
     vmx_adjust_control_registers();
+
+    if(!vmm_allocate_saved_state(vcpu))
+    {
+        vcpu->launch_failed = true;
+        return;
+    }
 
     if(!vmx_allocate_vmxon_region(vcpu))
     {
         vcpu->launch_failed = true;
-
         return;
     }
 
@@ -86,11 +107,11 @@ void vmm_virtualize_single_cpu(void* info)
     {
         vmx_free_vmxon_region(vcpu);
         vcpu->launch_failed = true;
-
         return;
     }
 
-    if(!vmx_vmxon((void*)vcpu->vmxon_region_phys))
+    // vmxon, vmclear, vmptrld
+    if(!vmx_prepare_to_launch(vcpu))
     {
         vmx_free_vmxon_region(vcpu);
         vmcs_free_vmcs_region(vcpu);
@@ -99,6 +120,13 @@ void vmm_virtualize_single_cpu(void* info)
 
         return;
     }
+
+    // setup vmcs
+    vmcs_setup_vmcs(vcpu);
+
+    // vm launch lul
+    __vmx_vmlaunch();
+
 
     pr_info("vmx enabled on cpu %d", vcpu->processor_id);
 }
@@ -115,7 +143,8 @@ void vmm_free_virtual_cpus(struct vmm_state* vmm)
     kfree(vmm->guest_cpus);
 }
 
-void vmm_shutdown_cpu_shim(struct vmm_state* vmm)
+// dont call this directly, use vmm_shutdown
+void vmm_shutdown_cpu(struct vmm_state* vmm)
 {
     struct virtual_cpu* vcpu = &vmm->guest_cpus[smp_processor_id()];
 
@@ -123,12 +152,19 @@ void vmm_shutdown_cpu_shim(struct vmm_state* vmm)
 
     if(vcpu->launch_failed)
     {
-        // vcpu already freed if launch failed
-        // see vmm_virtualize_single_cpu...
+        /*  
+        The virtual cpu freed and shutdown if the launch fails
+        see vmm_virtual_single_cpu and vmx_prepare_to_launch
+        */
         return;
     }
     
-    // todo: turn vmx off etc
+    __vmx_off();
+
+    // turn of vmx in cr4
+
+    // reset fixed bits
+    
 
     vmx_free_vmxon_region(vcpu);
     vmcs_free_vmcs_region(vcpu);
@@ -137,8 +173,9 @@ void vmm_shutdown_cpu_shim(struct vmm_state* vmm)
 //
 void vmm_shutdown(struct vmm_state* vmm)
 {
-    on_each_cpu((void*)vmm_shutdown_cpu_shim, vmm, true);
+    // Shutdown each virtualized cpu
+    on_each_cpu((void*)vmm_shutdown_cpu, vmm, true);
 
-    // free guest state
-    // free vmm
+    vmm_free_virtual_cpus(vmm);
+    vmm_free_vmm_state(vmm);
 }

@@ -18,6 +18,8 @@ typedef union
 int vmx_allocate_vmxon_region(struct virtual_cpu* vcpu);
 void vmx_free_vmxon_region(struct virtual_cpu* vcpu);
 
+int vmx_prepare_to_launch(struct virtual_cpu* vcpu);
+
 int vmx_vmxon(void* vmxon_phys_addr);
 
 void vmx_adjust_control_registers(void);
