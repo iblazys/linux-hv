@@ -19,7 +19,8 @@ basic control flow of the hypervisor is:
 
 ## Acknowledgements
 
- - [ksm](https://github.com/asamy/ksm)
+ - [ia32-doc](https://github.com/ia32-doc/ia32-doc)
  - [hypervisor from scratch series](https://rayanfam.com/topics/hypervisor-from-scratch-part-1/)
+ - [ksm](https://github.com/asamy/ksm)
 
 
