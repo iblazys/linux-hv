@@ -1,7 +1,7 @@
 # linux-hv
 super simple intel based linux hypervisor
 
-still need to implement a bunch of stuff but this is just for learning purposes.
+this is by no means stable and is purely for learning purposes.
 
 written and tested with WSL2 v1.0.3.0 on kernel version **5.15.83.1-microsoft-standard-WSL2+**
 
