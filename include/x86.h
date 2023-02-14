@@ -12,6 +12,7 @@
 // Instead of searching through the mess of linux headers
 // for the required intrinsics, they are all here for simplicity
 // 
+#define __align(alignment)	__attribute__((__aligned__(alignment)))
 
 #include <linux/kernel.h> /* Needed for pr_info() */
 #include <linux/slab.h> // kalloc / kzalloc
@@ -20,6 +21,7 @@
 #include <asm/msr.h> // rdmsrl
 #include <asm/errno.h> // asm error numbers (-EAGAIN etc)
 #include <asm/special_insns.h>
+#include <asm/page.h>
 
 #include "cpuid.h" // careful of redefinitions
 
@@ -69,6 +71,15 @@ static inline void __writecr4(uint64_t cr4)
 {
 	__asm("mov %0, %%cr4" :: "r"(cr4));
 }
+
+static inline uint64_t __readrflags(void)
+{
+    u64 rflags;
+	__asm __volatile("pushfq\n\tpopq %0" : "=r" (rflags));
+	return rflags;
+}
+
+// ---------------- VMX -------------------
 
 static inline int __vmx_on(void* phys)
 {

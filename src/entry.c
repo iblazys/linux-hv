@@ -25,7 +25,6 @@ int init_module(void)
 
     // DEBUG 
     pr_info("shutting down hypervisor");
-    vmm_shutdown(vmm_state);
    
     pr_info("hypervisor shutdown successfully");
     // DEBUG
@@ -38,12 +37,8 @@ int init_module(void)
 void cleanup_module(void) 
 { 
     pr_info("hypervisor unloading.\n");
-    
-    // Temporary for developing, run shutdown on all cpu's
-    //on_each_cpu((void*)vmm_shutdown, VmmState, true);
 
-    // Free VMM_STATE and GUEST_CPU states - only call this once
-    //vmm_shutdown(vmm_state);
+    vmm_shutdown(vmm_state);
 
     pr_info("hypervisor unloaded.\n");
 } 

@@ -1,7 +1,7 @@
 #include "vmx.h"
 #include "ia32.h"
 
-int vmx_allocate_vmxon_region(struct virtual_cpu* vcpu)
+int vmx_allocate_vmxon_region(struct virtual_cpu *vcpu)
 {
     void* vmxon_region = kzalloc(__PAGE_SIZE, GFP_KERNEL);
     //pr_info("vmxon region: %p", vmxon_region);
@@ -30,8 +30,8 @@ void vmx_free_vmxon_region(struct virtual_cpu* vcpu)
 }
 
 //
-// This function calls vmx on, then clears and loads the vmcs
-// it will also call vmx off incase of failure
+// This function calls VMXON, then clears and loads the vmcs
+// it will also call VMXOFF incase of failure
 //
 int vmx_prepare_to_launch(struct virtual_cpu* vcpu)
 {
@@ -62,22 +62,6 @@ int vmx_prepare_to_launch(struct virtual_cpu* vcpu)
         pr_err("VMCLEAR failed with status %d\n", status);
         __vmx_off();
 
-        return 0;
-    }
-
-    return 1;
-}
-
-// OBSOLETE
-int vmx_vmxon(void *vmxon_phys_addr)
-{
-    int status;
-    
-    status = __vmx_on(vmxon_phys_addr);
-
-    if(status)
-    {
-        pr_err("VMXON failed with status %d\n", status);
         return 0;
     }
 

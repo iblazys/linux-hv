@@ -1,6 +1,7 @@
 #include "vmm.h"
 #include "cpu.h"
 #include "vmx.h"
+#include "vmx_asm.h"
 #include "vmcs.h"
 
 struct vmm_state* vmm_init(void)
@@ -33,9 +34,14 @@ struct vmm_state* vmm_init(void)
     // Set state
     vmm->number_of_cpus = processorCount;
 
-    // Initialize each cpu
-    on_each_cpu(vmm_virtualize_single_cpu, vmm, true);
+    /* 
+    Setup and launch each cpu, __vmx_vminit is located in vmx_asm.S
+    which ends up calling vmm_virtualize_single_cpu
+    */
 
+    on_each_cpu((void*)__vmx_vminit, vmm, true);
+
+    // TODO: Error handling below
     vmm->init_status = true;
 
     return vmm;
@@ -74,8 +80,12 @@ int vmm_allocate_saved_state(struct virtual_cpu* vcpu)
     return 1;
 }
 
-void vmm_virtualize_single_cpu(void* info)
-{
+//
+// called from __vmx_vminit in vmx_asm.S
+// Initializes a single processor and launches the vm
+//
+void vmm_virtualize_single_cpu(void* info, uintptr_t gsp, uintptr_t gip)
+{    
     unsigned int processor_id = smp_processor_id();
 
     struct vmm_state* vmm = info;
@@ -121,14 +131,23 @@ void vmm_virtualize_single_cpu(void* info)
         return;
     }
 
+    // set vcpu rsp, rip, and eflags
+    vcpu->rsp = gsp;
+    vcpu->rip = gip;
+    vcpu->rflags = __readrflags();
+    
+    // put our virtual cpu at the top of the stack
+    *(struct virtual_cpu **)((uintptr_t)vcpu->stack + HOST_STACK_SIZE - 8) = vcpu;
+
     // setup vmcs
     vmcs_setup_vmcs(vcpu);
 
-    // vm launch lul
+    pr_info("ready to launch vm on cpu %d", vcpu->processor_id);
+
+    // call vmlaunch
     __vmx_vmlaunch();
 
-
-    pr_info("vmx enabled on cpu %d", vcpu->processor_id);
+    pr_info("WE FAILED!!");
 }
 
 //
@@ -159,15 +178,18 @@ void vmm_shutdown_cpu(struct vmm_state* vmm)
         return;
     }
     
+    // Turn vmx off
     __vmx_off();
 
-    // turn of vmx in cr4
+    // Disable vmx in cr4
 
-    // reset fixed bits
+    // Reset fixed bits
     
-
+    // Free vm regions
     vmx_free_vmxon_region(vcpu);
     vmcs_free_vmcs_region(vcpu);
+
+    //vmm_free_saved_state(vcpu); -- TODO
 }
 
 //
@@ -176,6 +198,7 @@ void vmm_shutdown(struct vmm_state* vmm)
     // Shutdown each virtualized cpu
     on_each_cpu((void*)vmm_shutdown_cpu, vmm, true);
 
+    // Free vcpus and vmm state
     vmm_free_virtual_cpus(vmm);
     vmm_free_vmm_state(vmm);
 }

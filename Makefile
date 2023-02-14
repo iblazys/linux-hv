@@ -25,19 +25,10 @@ $(MODULENAME)-y 	+= src/entry.o
 # Source
 $(MODULENAME)-y 	+= src/vmm.o
 $(MODULENAME)-y 	+= src/vmx.o
+$(MODULENAME)-y 	+= src/vmx_asm.o
 $(MODULENAME)-y 	+= src/vmcs.o
 $(MODULENAME)-y 	+= src/cpu.o
-#$(MODULENAME)-y 	+= src/socket_hiding.o
-#$(MODULENAME)-y 	+= src/packet_hiding.o
-#$(MODULENAME)-y 	+= src/port_knocking.o
-#$(MODULENAME)-y 	+= src/privilege_escalation.o
-#$(MODULENAME)-y 	+= src/module_hiding.o
-
-# Libs
-#$(MODULENAME)-y 	+= src/libs/syscalltable.o
-
-# Include
-#$(MODULENAME)-y 	+= src/include/utils.o
+$(MODULENAME)-y 	+= src/exit.o
 
 ccflags-y	:= -I$(SRCS_H) -Wno-declaration-after-statement
 
@@ -46,8 +37,6 @@ all:
 	$(MAKE) -C $(BUILDDIR) M=$(PWD) modules
 
 load:
-#insmod $(KERNELDIR)/net/ipv4/netfilter/nf_reject_ipv4.ko
-#insmod $(KERNELDIR)/net/ipv6/netfilter/nf_reject_ipv6.ko
 	sudo insmod $(MODULENAME).ko
 	dmesg |tail
 

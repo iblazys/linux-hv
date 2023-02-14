@@ -1,5 +1,6 @@
 #include "vmcs.h"
 #include "ia32.h"
+#include "vmx_asm.h"
 
 int vmcs_allocate_vmcs_region(struct virtual_cpu* vcpu)
 {
@@ -130,7 +131,6 @@ void vmcs_setup_guest(struct virtual_cpu* vcpu)
     segment_descriptor_register_64  idtr = { 0 };
 
     // TODO: save selectors to elimnate unnecessary instructions
-
     // Maybe move segment setup to VmcsSetupSegmentation() ?
     
     // Selectors
@@ -155,8 +155,6 @@ void vmcs_setup_guest(struct virtual_cpu* vcpu)
 
     __sgdt(&gdtr); // Get GDTR
     __sidt(&idtr); // Get LDTR
-
-    pr_info("got gdtr and idtr");
 
     __vmx_vmwrite(VMCS_GUEST_GDTR_LIMIT, gdtr.limit);
     __vmx_vmwrite(VMCS_GUEST_IDTR_LIMIT, idtr.limit);
@@ -201,13 +199,11 @@ void vmcs_setup_guest(struct virtual_cpu* vcpu)
     __vmx_vmwrite(VMCS_GUEST_SYSENTER_EIP, __readmsr(IA32_SYSENTER_EIP));
     __vmx_vmwrite(VMCS_GUEST_SYSENTER_ESP, __readmsr(IA32_SYSENTER_ESP));
 
-    pr_err("TODO: GUEST STATE");
+    __vmx_vmwrite(VMCS_GUEST_RFLAGS, vcpu->rflags);
+    __vmx_vmwrite(VMCS_GUEST_RSP, vcpu->rsp);
+    __vmx_vmwrite(VMCS_GUEST_RIP, vcpu->rip);
 
-    // TODO:
-    //__vmx_vmwrite(VMCS_GUEST_RFLAGS, currentvCpu->RFlags);
-    //__vmx_vmwrite(VMCS_GUEST_RSP, currentvCpu->RSP);
-    //__vmx_vmwrite(VMCS_GUEST_RIP, currentvCpu->RIP);
-
+    // TODO: Save this in a dedicated save_state function
     vcpu->saved_state->gdtr = gdtr;
     vcpu->saved_state->idtr = idtr;
 }
@@ -240,9 +236,9 @@ void vmcs_setup_host(struct virtual_cpu *vcpu)
     __vmx_vmwrite(VMCS_HOST_GDTR_BASE, vcpu->saved_state->gdtr.base_address);
     __vmx_vmwrite(VMCS_HOST_IDTR_BASE, vcpu->saved_state->idtr.base_address);
 
-    pr_err("TODO: HOST STATE");
-    //__vmx_vmwrite(VMCS_HOST_RSP, (uint64_t)currentvCpu->VmExitHandler);
-    //__vmx_vmwrite(VMCS_HOST_RIP, (uint64_t)&currentvCpu->VmExitStack);
+    __vmx_vmwrite(VMCS_HOST_RSP, (uint64_t)vcpu->stack + HOST_STACK_SIZE - 8);
+
+    __vmx_vmwrite(VMCS_HOST_RIP, (uint64_t)__vmx_entrypoint);
 
 }
 
