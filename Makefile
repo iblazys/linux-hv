@@ -29,6 +29,7 @@ $(MODULENAME)-y 	+= src/vmx_asm.o
 $(MODULENAME)-y 	+= src/vmcs.o
 $(MODULENAME)-y 	+= src/cpu.o
 $(MODULENAME)-y 	+= src/exit.o
+$(MODULENAME)-y 	+= src/validate.o
 
 ccflags-y	:= -I$(SRCS_H) -Wno-declaration-after-statement
 
