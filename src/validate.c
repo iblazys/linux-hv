@@ -2,6 +2,8 @@
 
 void validate_guest_entry_state(void)
 {
+    // WHY INTEL.... WHY
+
     vmentry_interrupt_information interrupt_info;
     ia32_vmx_entry_ctls_register entry_controls;
     ia32_vmx_pinbased_ctls_register pinbased_controls;
@@ -35,24 +37,27 @@ void validate_guest_entry_state(void)
     cr0.AsUInt = vmread(VMCS_GUEST_CR0);
     cr4.AsUInt = vmread(VMCS_GUEST_CR4);
 
-    // BUG_ON fails if condition is true
-    // ASSERT fails if condition is false
-
+    // The CR0 field must not set any bit to a value not supported in VMX operation (see Section 24.8).
     ASSERT(cr0.AsUInt == validate_adjust_guest_cr0(cr0).AsUInt);
     
-    if ((cr0.paging_enable == 1) &&
-        (unrestricted_guest == false))
+    // Bit 0 (corresponding to CR0.PE) and bit 31 (PG) are not checked if the “unrestricted guest” VM-execution
+    // control is 1
+    if ((cr0.paging_enable == 1) && (unrestricted_guest == false))
     {
         ASSERT(cr0.protection_enable == 1);
     }
 
+    // The CR4 field must not set any bit to a value not supported in VMX operation (see Section 24.8).
     ASSERT(cr4.AsUInt == validate_adjust_guest_cr4(cr4).AsUInt);
 
-    //
     // If bit 23 in the CR4 field (corresponding to CET) is 1, bit 16 in the
     // CR0 field (WP) must also be 1.
-    //
+    if(cr4.control_flow_enforcement_enable == 1)
+    {
+        ASSERT(cr0.write_protect == 1);
+    }
 
+    // If the “load debug controls” VM-entry control is 1, bits reserved in the msr must be 0.
     if (entry_controls.load_debug_controls == 1)
     {
         debug_controls.AsUInt = vmread(VMCS_GUEST_DEBUGCTL);
@@ -60,12 +65,25 @@ void validate_guest_entry_state(void)
         ASSERT(debug_controls.Reserved2 == 0);
     }
 
+    //
+    // The following checks are performed on processors that support Intel 64 architecture.
+    //
+
+    // If the “IA-32e mode guest” VM-entry control is 1, bit 31 in the CR0 field (corresponding to CR0.PG)
+    // and bit 5 in the CR4 field (corresponding to CR4.PAE) must each be 1.
     if (entry_controls.ia32e_mode_guest == 1)
     {
         ASSERT(cr0.paging_enable == 1);
         ASSERT(cr4.physical_address_extension == 1);
     }
 
+    // The CR3 field must be such that bits 63:52 and bits in the range 51:32 beyond the processor’s 
+    // physical address width are 0.
+    // TODO
+
+    // If the “load debug controls” VM-entry control is 1, bits 63:32 in the DR7 field must be 0. The first processors
+    // to support the virtual-machine extensions supported only the 1-setting of this control and thus performed
+    // this check unconditionally
     if (entry_controls.load_debug_controls == 1)
     {
         dr7 dr7;
@@ -74,29 +92,65 @@ void validate_guest_entry_state(void)
         ASSERT(dr7.Reserved4 == 0);
     }
 
-    //
-    // The IA32_SYSENTER_ESP field and the IA32_SYSENTER_EIP field must each
-    // contain a canonical address if the “load CET state” VM-entry control is 1.
-    //
+    // The IA32_SYSENTER_ESP field and the IA32_SYSENTER_EIP field must each contain a canonical address
+    // see 3.3.7 Address Calculations in 64-Bit Mode
+    uint64_t sysenter_esp;
+    uint64_t sysenter_eip;
+
+    sysenter_esp = __readmsr(IA32_SYSENTER_ESP);
+    sysenter_eip = __readmsr(IA32_SYSENTER_EIP);
+
+    validate_is_canonical_address((void*)sysenter_esp, __FILE__, __LINE__);
+    validate_is_canonical_address((void*)sysenter_eip, __FILE__, __LINE__);
+
+/*
+    if(!is_canonical_address((void*)sysenter_eip, __FILE__, __LINE__))
+    {
+        pr_info("ADDRESS NOT CANONICAL: sysenter_esp: 0x%llx", sysenter_esp);
+        ASSERT(false);
+    }
+
+    if(!is_canonical_address((void*)sysenter_esp, __FILE__, __LINE__))
+    {
+        pr_info("ADDRESS NOT CANONICAL: sysenter_eip: 0x%llx", sysenter_eip);
+        ASSERT(false);
+    }
+*/
+
+    // If the “load CET state” VM-entry control is 1, the IA32_S_CET field and the
+    // IA32_INTERRUPT_SSP_TABLE_ADDR field must contain canonical addresses.
+    ASSERT(entry_controls.load_cet_state == 0);
 
     //
-    // If the “load IA32_PERF_GLOBAL_CTRL” VM-entry control is 1,
+    // End of checks performed on processors that support Intel 64 architecture.
     //
+
+    // If the “load IA32_PERF_GLOBAL_CTRL” VM-entry control is 1, bits reserved in 
+    // the IA32_PERF_GLOBAL_CTRL MSR must be 0 in the field for that register (see Figure 20-3).
     ASSERT(entry_controls.load_ia32_perf_global_ctrl == 0);
 
 
-    // PAT CHECKS
+    // If the “load IA32_PAT” VM-entry control is 1, the value of the field for the IA32_PAT MSR must be one that could
+    // be written by WRMSR without fault at CPL 0. Specifically, each of the 8 bytes in the field must have one of the
+    // values 0 (UC), 1 (WC), 4 (WT), 5 (WP), 6 (WB), or 7 (UC-).
+    // TODO
 
+    // If the “load IA32_EFER” VM-entry control is 1 ...
     if (entry_controls.load_ia32_efer == 1)
     {
         ia32_efer_register efer;
 
+        // Bits reserved in the IA32_EFER MSR must be 0.
         efer.AsUInt = vmread(VMCS_GUEST_EFER);
         ASSERT(efer.Reserved1 == 0);
         ASSERT(efer.Reserved2 == 0);
         ASSERT(efer.Reserved3 == 0);
+
+        // Bit 10 (corresponding to IA32_EFER.LMA) must equal the value of the “IA-32e mode guest” VM-entry
+        // control.
         ASSERT(efer.ia32e_mode_active == entry_controls.ia32e_mode_guest);
 
+        // It must also be identical to bit 8 (LME) if bit 31 in the CR0 field (corresponding to CR0.PG) is 1.
         if (cr0.paging_enable == 1)
         {
             ASSERT(efer.ia32e_mode_active == efer.ia32e_mode_enable);
@@ -118,17 +172,35 @@ void validate_guest_entry_state(void)
     //
     ASSERT(entry_controls.load_cet_state == 0);
 
+    // If the “load guest IA32_LBR_CTL” VM-entry control is 1, bits reserved in the IA32_LBR_CTL MSR must be 0 in
+    // the field for that register
+    ASSERT(entry_controls.load_ia32_lbr_ctl == 0);
+
+    // If the “load PKRS” VM-entry control is 1, bits 63:32 must be 0 in the IA32_PKRS field
+    ASSERT(entry_controls.load_ia32_pkrs == 0);
+    
+    // If the “load UINV” VM-entry control is 1, bits 15:8 must be 0 in the guest UINV field.
+    // TODO - not in ia32.h yet, need to check which bit it is
+
+
 
     //
     // 26.3.1.2 Checks on Guest Segment Registers
     //
+
+    // This section specifies the checks on the fields for CS, SS, DS, ES, FS, GS, TR, and LDTR
+    
     segment_selector selector;
     vmx_segment_access_rights accessRights;
     uint32_t segmentLimit;
+    
+    // Selectors ...
 
+    // TR - The TI flag (bit 2) must be 0
     selector.AsUInt = (uint16_t)vmread(VMCS_GUEST_TR_SELECTOR);
     ASSERT(selector.table == 0);
 
+    // LDTR - If LDTR is usable, the TI flag (bit 2) must be 0.
     accessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_LDTR_ACCESS_RIGHTS);
     if (accessRights.unusable == 0)
     {
@@ -136,6 +208,8 @@ void validate_guest_entry_state(void)
         ASSERT(selector.table == 0);
     }
 
+    // SS - If the guest will not be virtual-8086 and the “unrestricted guest” VM-execution control is 0, the RPL
+    // (bits 1:0) must equal the RPL of the selector field for CS
     if ((rflags.virtual_8086_mode_flag == 0) &&
         (unrestricted_guest == false))
     {
@@ -146,6 +220,10 @@ void validate_guest_entry_state(void)
         ASSERT(selector.request_privilege_level == selectorCs.request_privilege_level);
     }
 
+    // Base addresses ...
+
+    // If the guest will be virtual-8086, the address must be the selector field 
+    // shifted left 4 bits (multiplied by 16)
     if (rflags.virtual_8086_mode_flag == 1)
     {
         selector.AsUInt = (uint16_t)vmread(VMCS_GUEST_CS_SELECTOR);
@@ -166,6 +244,59 @@ void validate_guest_entry_state(void)
     // The following checks are performed on processors that support Intel 64
     // architecture:
     //
+
+        // TR, FS, GS. The address must be canonical.
+        uint64_t base_address;
+
+        base_address = __readmsr(VMCS_GUEST_TR_BASE);
+        validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
+
+        base_address = __readmsr(VMCS_GUEST_FS_BASE);
+        validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
+
+        base_address = __readmsr(VMCS_GUEST_GS_BASE);
+        validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
+
+        // LDTR. If LDTR is usable, the address must be canonical
+        accessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_LDTR_ACCESS_RIGHTS);
+
+        if(accessRights.unusable == 0)
+        {
+            base_address = __readmsr(VMCS_GUEST_LDTR_BASE);
+            validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
+        }
+
+        // CS. Bits 63:32 of the address must be zero.
+        base_address = __readmsr(VMCS_GUEST_CS_BASE);    
+        ASSERT((base_address >> 32) == 0);
+
+        // SS, DS, ES. If the register is usable, bits 63:32 of the address must be zero.
+        accessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_SS_ACCESS_RIGHTS);
+        if(accessRights.unusable == 0)
+        {
+            base_address = __readmsr(VMCS_GUEST_SS_BASE);
+            ASSERT((base_address >> 32) == 0);
+        }
+
+        accessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_DS_ACCESS_RIGHTS);
+        if(accessRights.unusable == 0)
+        {
+            base_address = __readmsr(VMCS_GUEST_DS_BASE);
+            ASSERT((base_address >> 32) == 0);
+        }
+
+        accessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_ES_ACCESS_RIGHTS);
+        if(accessRights.unusable == 0)
+        {
+            base_address = __readmsr(VMCS_GUEST_ES_BASE);
+            ASSERT((base_address >> 32) == 0);
+        }
+
+    //
+    // End of checks performed on processors that support Intel 64 architecture.
+    //
+
+    // Limit fields for CS, SS, DS, ES, FS, GS. If the guest will be virtual-8086, the field must be 0000FFFFH
     if (rflags.virtual_8086_mode_flag == 1)
     {
         ASSERT(vmread(VMCS_GUEST_CS_LIMIT) == 0xffff);
@@ -175,6 +306,10 @@ void validate_guest_entry_state(void)
         ASSERT(vmread(VMCS_GUEST_FS_LIMIT) == 0xffff);
         ASSERT(vmread(VMCS_GUEST_GS_LIMIT) == 0xffff);
     }
+
+    // Access Rights
+
+    // If the guest will be virtual-8086, the field must be 000000F3H.
     if (rflags.virtual_8086_mode_flag == 1)
     {
         ASSERT(vmread(VMCS_GUEST_CS_ACCESS_RIGHTS) == 0xf3);
@@ -186,6 +321,8 @@ void validate_guest_entry_state(void)
     }
     else
     {
+    // If the guest will not be virtual-8086, the different sub-fields are considered separately
+    
         validate_segment_access_rights(SegmentCs,
                                 (uint32_t)vmread(VMCS_GUEST_CS_ACCESS_RIGHTS),
                                 (uint32_t)vmread(VMCS_GUEST_CS_LIMIT),

@@ -34,4 +34,22 @@ void validate_segment_access_rights(segment_type segment_type,
     bool ia32e_mode_guest,
     bool unrestricted_guest);
 
+/*
+* Checks if the high bits of the supplied address 
+* are either all zeros or all ones and returns the result
+*/
+static inline void validate_is_canonical_address(void *addr, const char* file, int line) 
+{
+  uint64_t addr_value = (uint64_t)addr;
+  uint16_t high_bits = (uint16_t)(addr_value >> 48);
+
+  if(!(high_bits == 0 || high_bits == 0xffff))
+  {
+    pr_err("%s:%d address 0x%llx is not canonical", file, line, addr_value);
+    ASSERT(false);
+  }
+
+  //return (high_bits == 0 || high_bits == 0xffff);
+}
+
 #endif
