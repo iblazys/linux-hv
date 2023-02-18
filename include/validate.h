@@ -17,6 +17,8 @@ typedef enum _segment_type
     SegmentEs,
     SegmentFs,
     SegmentGs,
+    SegmentTr,
+    SegmentLdtr
 } segment_type;
 
 void validate_guest_entry_state(void);
@@ -50,6 +52,20 @@ static inline void validate_is_canonical_address(void *addr, const char* file, i
   }
 
   //return (high_bits == 0 || high_bits == 0xffff);
+}
+
+static inline void validate_is_bit_set(unsigned int num, int pos) {
+    // Create a mask with a 1 in the bit position we want to check
+    unsigned int mask = 1 << pos;
+
+    // Check if the bit is set by performing a bitwise AND with the mask
+    // If the result is non-zero, the bit is set
+    //return (num & mask) != 0;
+
+    if((num & mask) == 0)
+    {
+      ASSERT(false);
+    }
 }
 
 #endif

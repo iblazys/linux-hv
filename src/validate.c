@@ -1,5 +1,31 @@
 #include "validate.h"
 
+/**
+ * @file validate.c
+ * @author extended by Matt Blazys (https://github.com/iblazys)
+ * 
+ * originally written by Satoshi Tanda (tanda.sat@gmail.com)
+ * 
+ * @brief Checks validity of the guest VMCS fields for VM-entry as per
+ *      26.3 CHECKING AND LOADING GUEST STATE
+ * @version 0.1
+ * @date 2023-02-18
+ *
+ * @details This file implements part of checks performed by a processor during
+ *      VM-entry as CheckGuestVmcsFieldsForVmEntry(). This can be called on VM-exit
+ *      reason 33 (0x21), VM-entry failure due to invalid guest state as below
+ *      in order to find out exactly which checks failed. Code is written for
+ *      linux based kernel modules.
+ *
+ * @code{.c}
+ *      switch (vmExitReason)
+ *      {
+ *      case VMX_EXIT_REASON_ERROR_INVALID_GUEST_STATE:
+ *          CheckGuestVmcsFieldsForVmEntry();
+ *          // ...
+ * @endcode
+ */
+
 void validate_guest_entry_state(void)
 {
     // WHY INTEL.... WHY
@@ -192,7 +218,7 @@ void validate_guest_entry_state(void)
     
     segment_selector selector;
     vmx_segment_access_rights accessRights;
-    uint32_t segmentLimit;
+    // uint32_t segmentLimit;
     
     // Selectors ...
 
@@ -307,7 +333,7 @@ void validate_guest_entry_state(void)
         ASSERT(vmread(VMCS_GUEST_GS_LIMIT) == 0xffff);
     }
 
-    // Access Rights
+    // Access Rights ...
 
     // If the guest will be virtual-8086, the field must be 000000F3H.
     if (rflags.virtual_8086_mode_flag == 1)
@@ -322,7 +348,7 @@ void validate_guest_entry_state(void)
     else
     {
     // If the guest will not be virtual-8086, the different sub-fields are considered separately
-    
+
         validate_segment_access_rights(SegmentCs,
                                 (uint32_t)vmread(VMCS_GUEST_CS_ACCESS_RIGHTS),
                                 (uint32_t)vmread(VMCS_GUEST_CS_LIMIT),
@@ -364,62 +390,35 @@ void validate_guest_entry_state(void)
                                 (uint16_t)vmread(VMCS_GUEST_GS_SELECTOR),
                                 (entry_controls.ia32e_mode_guest != false),
                                 unrestricted_guest);
-    }
+        
+        validate_segment_access_rights(SegmentTr,
+                                (uint32_t)vmread(VMCS_GUEST_TR_ACCESS_RIGHTS),
+                                (uint32_t)vmread(VMCS_GUEST_TR_LIMIT),
+                                (uint16_t)vmread(VMCS_GUEST_TR_SELECTOR),
+                                (entry_controls.ia32e_mode_guest != false),
+                                unrestricted_guest);
 
-    //
-    // TR
-    //
-    accessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_TR_ACCESS_RIGHTS);
-    segmentLimit = (uint32_t)vmread(VMCS_GUEST_TR_LIMIT);
-    if (entry_controls.ia32e_mode_guest == 0)
-    {
-        ASSERT((accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED) ||
-                  (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED));
-    }
-    else
-    {
-        ASSERT(accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED);
-    }
-    ASSERT(accessRights.descriptor_type == 0);
-    ASSERT(accessRights.present == 1);
-    ASSERT(accessRights.Reserved1 == 0);
-    ASSERT(accessRights.Reserved2 == 0);
-    if (!MV_IS_FLAG_SET(segmentLimit, 0xfff))
-    {
-        ASSERT(accessRights.granularity == 0);
-    }
-    if (MV_IS_FLAG_SET(segmentLimit, 0xfff00000))
-    {
-        ASSERT(accessRights.granularity == 1);
-    }
-    ASSERT(accessRights.unusable == 0);
-
-    //
-    // LDTR
-    //
-    accessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_LDTR_ACCESS_RIGHTS);
-    if (accessRights.unusable == 0)
-    {
-        segmentLimit = (uint32_t)vmread(VMCS_GUEST_LDTR_LIMIT);
-        ASSERT(accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE);
-        ASSERT(accessRights.descriptor_type == 0);
-        ASSERT(accessRights.present == 1);
-        ASSERT(accessRights.Reserved1 == 0);
-        ASSERT(accessRights.Reserved2 == 0);
-        if (!MV_IS_FLAG_SET(segmentLimit, 0xfff))
-        {
-            ASSERT(accessRights.granularity == 0);
-        }
-        if (MV_IS_FLAG_SET(segmentLimit, 0xfff00000))
-        {
-            ASSERT(accessRights.granularity == 1);
-        }
+        validate_segment_access_rights(SegmentLdtr,
+                                (uint32_t)vmread(VMCS_GUEST_LDTR_ACCESS_RIGHTS),
+                                (uint32_t)vmread(VMCS_GUEST_LDTR_LIMIT),
+                                (uint16_t)vmread(VMCS_GUEST_LDTR_SELECTOR),
+                                (entry_controls.ia32e_mode_guest != false),
+                                unrestricted_guest);
     }
 
     //
     // 26.3.1.3 Checks on Guest Descriptor-Table Registers
     //
-    // ------------ TODO ------------
+
+    // The following checks are performed on the fields for GDTR and IDTR
+
+    // On processors that support Intel 64 architecture, the base-address fields must contain canonical addresses
+
+    base_address = __readmsr(VMCS_GUEST_GDTR_BASE);
+    validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
+
+    base_address = __readmsr(VMCS_GUEST_IDTR_BASE);
+    validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
 
     //
     // 26.3.1.4 Checks on Guest RIP, RFLAGS, and SSP
@@ -652,99 +651,752 @@ void validate_segment_access_rights(segment_type segment_type,
     accessRightsCs.AsUInt = (uint32_t)vmread(VMCS_GUEST_CS_ACCESS_RIGHTS);
     cr0.AsUInt = vmread(VMCS_GUEST_CR0);
 
-    //
-    // Bits 3:0 (Type)
-    //
+    // The intel manual jumps around alot here (as these checks can be performed in any order)
+    // so I've tried to make it as clear as possible
+
+    // The checks on each bit vary for each segment.
+
     switch (segment_type)
     {
+        // ------ CS CHECKS -------
         case SegmentCs:
-
-        if (unrestricted_guest == false)
         {
-            ASSERT((accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_ONLY_ACCESSED) ||
-                      (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED) ||
-                      (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_ONLY_CONFORMING_ACCESSED) ||
-                      (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_CONFORMING_ACCESSED));
-        }
-        else
-        {
-            ASSERT((accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED) ||
-                      (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_ONLY_ACCESSED) ||
-                      (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED) ||
-                      (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_ONLY_CONFORMING_ACCESSED) ||
-                      (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_CONFORMING_ACCESSED));
-        }
-        break;
+            //
+            // Bits 3:0 (Type)
+            //
 
+            // The values allowed depend on the setting of the “unrestricted guest” VM-execution control
+
+            // If the control is 0, the Type must be 9, 11, 13, or 15 (accessed code segment)
+            if (unrestricted_guest == false)
+            {
+                ASSERT((accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_ONLY_ACCESSED) ||
+                        (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED) ||
+                        (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_ONLY_CONFORMING_ACCESSED) ||
+                        (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_CONFORMING_ACCESSED));
+            }
+            else
+            {
+
+            // If the control is 1, the Type must be either 3 (read/write accessed expand-up data segment)
+            // or one of 9, 11, 13, and 15 (accessed code segment)
+
+                ASSERT((accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED) ||
+                        (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_ONLY_ACCESSED) ||
+                        (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED) ||
+                        (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_ONLY_CONFORMING_ACCESSED) ||
+                        (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_CONFORMING_ACCESSED));
+            }
+
+            //
+            // Bit 4 (S). If the register is CS or if the register is usable, S must be 1
+            //
+
+            ASSERT(accessRights.descriptor_type == 1);
+
+            //
+            // Bits 6:5 (DPL).
+            //
+
+            // If the Type is 3 (read/write accessed expand-up data segment) 
+            if(accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED)
+            {
+                // The DPL must be 0.
+                ASSERT(accessRights.descriptor_privilege_level == 0);
+
+                // Type can be 3 only if the “unrestricted guest” VM-execution control is 1.
+                ASSERT(unrestricted_guest == true);
+            }
+
+            // If the Type is 9 or 11 (non-conforming code segment), the DPL must equal the DPL in the
+            // access-rights field for SS.
+            if((accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_ONLY_ACCESSED) ||
+                (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED))
+            {
+                ASSERT(accessRights.descriptor_privilege_level == accessRightsSs.descriptor_privilege_level);
+            }
+
+            // If the Type is 13 or 15 (conforming code segment), the DPL cannot be greater than the
+            // DPL in the access-rights field for SS.
+            if((accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_ONLY_CONFORMING_ACCESSED) ||
+                (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_CONFORMING_ACCESSED))
+            {
+                ASSERT(accessRights.descriptor_privilege_level <= accessRightsSs.descriptor_privilege_level);
+            }
+            
+            //
+            // Bit 7 (P). If the register is CS or if the register is usable, P must be 1.
+            //
+            ASSERT(accessRights.present == 1);
+            
+            //
+            // Bits 11:8 (reserved). If the register is CS or if the register is usable, these bits must all be 0.
+            //
+            ASSERT(accessRights.Reserved1 == 0);
+
+            //
+            // Bit 14 (D/B). For CS, D/B must be 0 if the guest will be IA-32e mode and the L bit (bit 13) in the
+            // access-rights field is 1.
+            if((ia32e_mode_guest == true) &&
+                (accessRights.long_mode == 1))
+            {
+                ASSERT(accessRights.default_big == 0);
+            }
+
+            //
+            // Bit 15 (G). The following checks apply if the register is CS or if the register is usable
+            //
+
+            // If any bit in the limit field in the range 11:0 is 0, G must be 0.
+            unsigned int mask = 0xFFF;
+
+            if((segment_limit & mask) != mask)
+            {
+                // At least one bit in range 11:0 is 0
+                ASSERT(accessRights.granularity == 0);
+            }
+
+            // If any bit in the limit field in the range 31:20 is 1, G must be 1
+            mask = 0xFFFFF000;
+
+            if((segment_limit & mask) != mask)
+            {
+                ASSERT(accessRights.granularity == 1);
+            }
+
+            // Bits 31:17 (reserved). If the register is CS or if the register is usable, these bits must all be 0
+            mask = 0xFFFE0000;
+            ASSERT((accessRights.Reserved2 & mask) == 0);
+
+            break;
+        }
+
+        // ------ SS CHECKS -------
         case SegmentSs:
+        {
+            //
+            // Bits 3:0 (Type)
+            //
+            
+            // If SS is usable, the Type must be 3 or 7 (read/write, accessed data segment)
+            if(accessRights.unusable == 0) 
+            {
+                ASSERT((accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED) ||
+                        (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_EXPAND_DOWN_ACCESSED));
+            }
 
-        if (unrestricted_guest == false)
-        {
-            ASSERT(accessRights.descriptor_privilege_level == selector.request_privilege_level);
+            //
+            // Bit 4 (S). If the register is CS or if the register is usable, S must be 1
+            //
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.descriptor_type == 1);
+            }
+
+            //
+            // Bits 6:5 (DPL).
+            //
+
+            // If the “unrestricted guest” VM-execution control is 0, the DPL must equal the RPL from the
+            // selector field.
+            if (unrestricted_guest == false)
+            {
+                ASSERT(accessRights.descriptor_privilege_level == selector.request_privilege_level);
+            }
+
+            // The DPL must be 0 either if the Type in the access-rights field for CS is 3 (read/write
+            // accessed expand-up data segment) or if bit 0 in the CR0 field (corresponding to CR0.PE) is 0
+            if ((accessRightsCs.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED) ||
+                (cr0.protection_enable == 0))
+            {
+                ASSERT(accessRights.descriptor_privilege_level == 0);
+            }
+
+            //
+            // Bit 7 (P). If the register is CS or if the register is usable, P must be 1.
+            //
+
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.present == 1);
+            }
+
+            //
+            // Bits 11:8 (reserved). If the register is CS or if the register is usable, these bits must all be 0.
+            //
+
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.Reserved1 == 0);
+            }
+
+            //
+            // Bit 14 (D/B). - Only checks for CS.
+            //
+
+            //
+            // Bit 15 (G). The following checks apply if the register is CS or if the register is usable
+            //
+            if(accessRights.unusable == 0)
+            {
+                // If any bit in the limit field in the range 11:0 is 0, G must be 0.
+                unsigned int mask = 0xFFF;
+
+                if((segment_limit & mask) != mask)
+                {
+                    // At least one bit in range 11:0 is 0
+                    ASSERT(accessRights.granularity == 0);
+                }
+
+                // If any bit in the limit field in the range 31:20 is 1, G must be 1
+                mask = 0xFFFFF000;
+
+                if((segment_limit & mask) != mask)
+                {
+                    ASSERT(accessRights.granularity == 1);
+                }
+            }
+
+            //
+            // Bits 31:17 (reserved). If the register is CS or if the register is usable, these bits must all be 0
+            //
+            
+            if(accessRights.unusable == 0)
+            {
+                unsigned int mask = 0xFFFE0000;
+                ASSERT((accessRights.Reserved2 & mask) == 0);
+            }
+            
+            break;
         }
-        if ((accessRightsCs.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED) ||
-            (cr0.protection_enable == 1))
+
+        // ------ DS CHECKS -------
+        case SegmentDs:
         {
-            ASSERT(accessRights.descriptor_privilege_level == 0);
+            //
+            // Bits 3:0 (Type)
+            //
+
+            // The following checks apply if the register is usable
+            if(accessRights.unusable == 0)
+            {
+                // Bit 0 of the Type must be 1 (accessed).
+                ASSERT((accessRights.type >> 0) & 1);
+
+                // If bit 3 of the Type is 1 (code segment), then bit 1 of the Type must be 1 (readable)
+                if((accessRights.type >> 3) & 1) 
+                {
+                    ASSERT((accessRights.type >> 1) & 1);
+                }
+            }
+
+            //
+            // Bit 4 (S). If the register is CS or if the register is usable, S must be 1
+            //
+
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.descriptor_type == 1);
+            }
+
+            //
+            // Bits 6:5 (DPL).
+            //
+
+            // The DPL cannot be less than the RPL in the selector field if (1) the
+            // “unrestricted guest” VM-execution control is 0; (2) the register is usable; and (3) the Type in
+            // the access-rights field is in the range 0 – 11 (data segment or non-conforming code segment).
+            if((unrestricted_guest == false) &&
+                (accessRights.unusable == 0) &&
+                (accessRights.type <= 11))
+            {
+                ASSERT(accessRights.descriptor_privilege_level >= selector.request_privilege_level);
+            }
+
+            //
+            // Bit 7 (P). If the register is CS or if the register is usable, P must be 1.
+            //
+
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.present == 1);
+            }
+
+            //
+            // Bits 11:8 (reserved). If the register is CS or if the register is usable, these bits must all be 0.
+            //
+            
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.Reserved1 == 0);
+            }
+
+            //
+            // Bit 14 (D/B). - Only checks for CS.
+            //
+
+            //
+            // Bit 15 (G). The following checks apply if the register is CS or if the register is usable
+            //
+            if(accessRights.unusable == 0)
+            {
+                // If any bit in the limit field in the range 11:0 is 0, G must be 0.
+                unsigned int mask = 0xFFF;
+
+                if((segment_limit & mask) != mask)
+                {
+                    // At least one bit in range 11:0 is 0
+                    ASSERT(accessRights.granularity == 0);
+                }
+
+                // If any bit in the limit field in the range 31:20 is 1, G must be 1
+                mask = 0xFFFFF000;
+
+                if((segment_limit & mask) != mask)
+                {
+                    ASSERT(accessRights.granularity == 1);
+                }
+            }
+
+            //
+            // Bits 31:17 (reserved). If the register is CS or if the register is usable, these bits must all be 0
+            //
+            
+            if(accessRights.unusable == 0)
+            {
+                unsigned int mask = 0xFFFE0000;
+                ASSERT((accessRights.Reserved2 & mask) == 0);
+            }
+            
+            break;
         }
-        break;
+
+        // ------ ES CHECKS -------
+        case SegmentEs:
+        {
+            //
+            // Bits 3:0 (Type)
+            //
+
+            // The following checks apply if the register is usable
+            if(accessRights.unusable == 0)
+            {
+                // Bit 0 of the Type must be 1 (accessed).
+                ASSERT((accessRights.type >> 0) & 1);
+
+                // If bit 3 of the Type is 1 (code segment), then bit 1 of the Type must be 1 (readable)
+                if((accessRights.type >> 3) & 1) 
+                {
+                    ASSERT((accessRights.type >> 1) & 1);
+                }
+            }
+
+            //
+            // Bit 4 (S). If the register is CS or if the register is usable, S must be 1
+            //
+
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.descriptor_type == 1);
+            }
+
+            ///
+            // Bits 6:5 (DPL).
+            //
+
+            // The DPL cannot be less than the RPL in the selector field if (1) the
+            // “unrestricted guest” VM-execution control is 0; (2) the register is usable; and (3) the Type in
+            // the access-rights field is in the range 0 – 11 (data segment or non-conforming code segment).
+            if((unrestricted_guest == false) &&
+                (accessRights.unusable == 0) &&
+                (accessRights.type <= 11))
+            {
+                ASSERT(accessRights.descriptor_privilege_level >= selector.request_privilege_level);
+            }
+
+            //
+            // Bit 7 (P). If the register is CS or if the register is usable, P must be 1.
+            //
+
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.present == 1);
+            }
+
+            //
+            // Bits 11:8 (reserved). If the register is CS or if the register is usable, these bits must all be 0.
+            //
+            
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.Reserved1 == 0);
+            }
+
+            //
+            // Bit 14 (D/B). - Only checks for CS.
+            //
+
+            //
+            // Bit 15 (G). The following checks apply if the register is CS or if the register is usable
+            //
+            if(accessRights.unusable == 0)
+            {
+                // If any bit in the limit field in the range 11:0 is 0, G must be 0.
+                unsigned int mask = 0xFFF;
+
+                if((segment_limit & mask) != mask)
+                {
+                    // At least one bit in range 11:0 is 0
+                    ASSERT(accessRights.granularity == 0);
+                }
+
+                // If any bit in the limit field in the range 31:20 is 1, G must be 1
+                mask = 0xFFFFF000;
+
+                if((segment_limit & mask) != mask)
+                {
+                    ASSERT(accessRights.granularity == 1);
+                }
+            }
+
+            //
+            // Bits 31:17 (reserved). If the register is CS or if the register is usable, these bits must all be 0
+            //
+            
+            if(accessRights.unusable == 0)
+            {
+                unsigned int mask = 0xFFFE0000;
+                ASSERT((accessRights.Reserved2 & mask) == 0);
+            }
+
+            break;
+        }
+
+        // ------ FS CHECKS -------
+        case SegmentFs:
+        {
+            //
+            // Bits 3:0 (Type)
+            //
+
+            // The following checks apply if the register is usable
+            if(accessRights.unusable == 0)
+            {
+                // Bit 0 of the Type must be 1 (accessed).
+                ASSERT((accessRights.type >> 0) & 1);
+
+                // If bit 3 of the Type is 1 (code segment), then bit 1 of the Type must be 1 (readable)
+                if((accessRights.type >> 3) & 1) 
+                {
+                    ASSERT((accessRights.type >> 1) & 1);
+                }
+            }
+
+            //
+            // Bit 4 (S). If the register is CS or if the register is usable, S must be 1
+            //
+
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.descriptor_type == 1);
+            }
+
+            ///
+            // Bits 6:5 (DPL).
+            //
+
+            // The DPL cannot be less than the RPL in the selector field if (1) the
+            // “unrestricted guest” VM-execution control is 0; (2) the register is usable; and (3) the Type in
+            // the access-rights field is in the range 0 – 11 (data segment or non-conforming code segment).
+            if((unrestricted_guest == false) &&
+                (accessRights.unusable == 0) &&
+                (accessRights.type <= 11))
+            {
+                ASSERT(accessRights.descriptor_privilege_level >= selector.request_privilege_level);
+            }
+
+            //
+            // Bit 7 (P). If the register is CS or if the register is usable, P must be 1.
+            //
+
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.present == 1);
+            }
+
+            //
+            // Bits 11:8 (reserved). If the register is CS or if the register is usable, these bits must all be 0.
+            //
+            
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.Reserved1 == 0);
+            }
+
+            //
+            // Bit 14 (D/B). - Only checks for CS.
+            //
+
+            //
+            // Bit 15 (G). The following checks apply if the register is CS or if the register is usable
+            //
+            if(accessRights.unusable == 0)
+            {
+                // If any bit in the limit field in the range 11:0 is 0, G must be 0.
+                unsigned int mask = 0xFFF;
+
+                if((segment_limit & mask) != mask)
+                {
+                    // At least one bit in range 11:0 is 0
+                    ASSERT(accessRights.granularity == 0);
+                }
+
+                // If any bit in the limit field in the range 31:20 is 1, G must be 1
+                mask = 0xFFFFF000;
+
+                if((segment_limit & mask) != mask)
+                {
+                    ASSERT(accessRights.granularity == 1);
+                }
+            }
+
+            //
+            // Bits 31:17 (reserved). If the register is CS or if the register is usable, these bits must all be 0
+            //
+            
+            if(accessRights.unusable == 0)
+            {
+                unsigned int mask = 0xFFFE0000;
+                ASSERT((accessRights.Reserved2 & mask) == 0);
+            }
+
+            break;
+        }
+
+        // ------ GS CHECKS -------
+        case SegmentGs:
+        {
+            //
+            // Bits 3:0 (Type)
+            //
+
+            // The following checks apply if the register is usable
+            if(accessRights.unusable == 0)
+            {
+                // Bit 0 of the Type must be 1 (accessed).
+                ASSERT((accessRights.type >> 0) & 1);
+
+                // If bit 3 of the Type is 1 (code segment), then bit 1 of the Type must be 1 (readable)
+                if((accessRights.type >> 3) & 1) 
+                {
+                    ASSERT((accessRights.type >> 1) & 1);
+                }
+            }
+
+            //
+            // Bit 4 (S). If the register is CS or if the register is usable, S must be 1
+            //
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.descriptor_type == 1);
+            }
+
+            ///
+            // Bits 6:5 (DPL).
+            //
+
+            // The DPL cannot be less than the RPL in the selector field if (1) the
+            // “unrestricted guest” VM-execution control is 0; (2) the register is usable; and (3) the Type in
+            // the access-rights field is in the range 0 – 11 (data segment or non-conforming code segment).
+            if((unrestricted_guest == false) &&
+                (accessRights.unusable == 0) &&
+                (accessRights.type <= 11))
+            {
+                ASSERT(accessRights.descriptor_privilege_level >= selector.request_privilege_level);
+            }
+
+            //
+            // Bit 7 (P). If the register is CS or if the register is usable, P must be 1.
+            //
+
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.present == 1);
+            }
+
+            //
+            // Bits 11:8 (reserved). If the register is CS or if the register is usable, these bits must all be 0.
+            //
+            
+            if(accessRights.unusable == 0)
+            {
+                ASSERT(accessRights.Reserved1 == 0);
+            }
+
+            //
+            // Bit 14 (D/B). - Only checks for CS.
+            //
+
+            //
+            // Bit 15 (G). The following checks apply if the register is CS or if the register is usable
+            //
+            if(accessRights.unusable == 0)
+            {
+                // If any bit in the limit field in the range 11:0 is 0, G must be 0.
+                unsigned int mask = 0xFFF;
+
+                if((segment_limit & mask) != mask)
+                {
+                    // At least one bit in range 11:0 is 0
+                    ASSERT(accessRights.granularity == 0);
+                }
+
+                // If any bit in the limit field in the range 31:20 is 1, G must be 1
+                mask = 0xFFFFF000;
+
+                if((segment_limit & mask) != mask)
+                {
+                    ASSERT(accessRights.granularity == 1);
+                }
+            }
+
+            //
+            // Bits 31:17 (reserved). If the register is CS or if the register is usable, these bits must all be 0
+            //
+            
+            if(accessRights.unusable == 0)
+            {
+                unsigned int mask = 0xFFFE0000;
+                ASSERT((accessRights.Reserved2 & mask) == 0);
+            }
+
+            break;
+        }
+
+        case SegmentTr:
+        {
+            //
+            // Bits 3:0 (Type)
+            //
+
+            // If the guest will not be IA-32e mode, the Type must be 3 (16-bit busy TSS) or 11 (32-bit busy TSS)
+            if (ia32e_mode_guest == 0)
+            {
+                ASSERT((accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE_ACCESSED) ||
+                        (accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED));
+            }
+            else
+            {
+                // If the guest will be IA-32e mode, the Type must be 11 (64-bit busy TSS)
+                ASSERT(accessRights.type == SEGMENT_DESCRIPTOR_TYPE_CODE_EXECUTE_READ_ACCESSED);
+            }
+
+            //
+            // Bit 4 (S). S must be 0.
+            //
+            ASSERT(accessRights.descriptor_type == 0);
+
+            //
+            // Bit 7 (P). P must be 1.
+            //
+            ASSERT(accessRights.present == 1);
+            
+            //
+            // Bits 11:8 (reserved). These bits must all be 0
+            //
+            ASSERT(accessRights.Reserved1 == 0);
+
+            //
+            // Bit 15 (G)
+            //
+
+            // If any bit in the limit field in the range 11:0 is 0, G must be 0.
+            unsigned int mask = 0xFFF;
+
+            if((segment_limit & mask) != mask)
+            {
+                // At least one bit in range 11:0 is 0
+                ASSERT(accessRights.granularity == 0);
+            }
+
+            // If any bit in the limit field in the range 31:20 is 1, G must be 1
+            mask = 0xFFFFF000;
+
+            if((segment_limit & mask) != mask)
+            {
+                ASSERT(accessRights.granularity == 1);
+            }
+
+            //
+            // Bit 16 (Unusable). The unusable bit must be 0.
+            //
+            ASSERT(accessRights.unusable == 0);
+
+            //
+            // Bits 31:17 (reserved). These bits must all be 0
+            //
+            ASSERT(accessRights.Reserved2 == 0);
+
+            break;
+        }
+
+        case SegmentLdtr:
+        {
+            //
+            // Bits 3:0 (Type). The Type must be 2 (LDT)
+            //
+            ASSERT(accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE);
+
+            //
+            // Bit 4 (S). S must be 0.
+            //
+            ASSERT(accessRights.descriptor_type == 0);
+
+            //
+            // Bit 7 (P). P must be 1.
+            //
+            ASSERT(accessRights.present == 1);
+
+            //
+            // Bits 11:8 (reserved). These bits must all be 0
+            //
+            ASSERT(accessRights.Reserved1 == 0);
+
+            //
+            // Bit 15 (G)
+            //
+
+            // If any bit in the limit field in the range 11:0 is 0, G must be 0.
+            unsigned int mask = 0xFFF;
+
+            if((segment_limit & mask) != mask)
+            {
+                // At least one bit in range 11:0 is 0
+                ASSERT(accessRights.granularity == 0);
+            }
+
+            // If any bit in the limit field in the range 31:20 is 1, G must be 1
+            mask = 0xFFFFF000;
+
+            if((segment_limit & mask) != mask)
+            {
+                ASSERT(accessRights.granularity == 1);
+            }
+
+            //
+            // Bits 31:17 (reserved). These bits must all be 0
+            //
+
+            ASSERT(accessRights.Reserved2 == 0);
+
+            break;
+        }
 
         default:
-
-        if ((unrestricted_guest == false) &&
-            (accessRights.unusable == 0) &&
-            (/*(accessRights.Type >= 0) &&*/
-                (accessRights.type <= 11)))
         {
-            ASSERT(accessRights.descriptor_privilege_level >= selector.request_privilege_level);
-        }
-        break;
-    }
-
-    //
-    // Bit 7 (P)
-    //
-    if ((segment_type == SegmentCs) ||
-        (accessRights.unusable == 0))
-    {
-        ASSERT(accessRights.present == 1);
-    }
-
-    //
-    // Bits 11:8 (reserved) and bits 31:17 (reserved)
-    //
-    if ((segment_type == SegmentCs) ||
-        (accessRights.unusable == 0))
-    {
-        ASSERT(accessRights.Reserved1 == 0);
-        ASSERT(accessRights.Reserved2 == 0);
-    }
-
-    //
-    // Bit 14 (D/B)
-    //
-    if (segment_type == SegmentCs)
-    {
-        if ((ia32e_mode_guest != false) &&
-            (accessRights.long_mode == 1))
-        {
-            ASSERT(accessRights.default_big == 0);
-        }
-    }
-
-    //
-    // Bit 15 (G)
-    //
-    if ((segment_type == SegmentCs) ||
-        (accessRights.unusable == 0))
-    {
-        if (!MV_IS_FLAG_SET(segment_limit, 0xfff))
-        {
-            ASSERT(accessRights.granularity == 0);
-        }
-        if (MV_IS_FLAG_SET(segment_limit, 0xfff00000))
-        {
-            ASSERT(accessRights.granularity == 1);
+            pr_err("UNHANDLED SEGMENT TYPE");
+            ASSERT(false);
+            break;
         }
     }
 }
