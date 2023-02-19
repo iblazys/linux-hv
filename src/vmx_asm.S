@@ -152,7 +152,7 @@ __vmx_entrypoint:
 	jmp	2f
 
 1:
-	/* See exit.c (vcpu_do_exit)  */
+	/* See exit.c (exit_vcpu_do_exit)  */
 	POP_REGS
 	vmxoff
 	jna	2f

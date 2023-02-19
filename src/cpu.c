@@ -17,13 +17,13 @@ bool cpu_supports_vmx(void)
     
     if(cpu_info.cpuid_feature_information_ecx.Reserved2) 
     {
-        pr_warn("detected a hypervisor running already");
+        pr_warn("linux-hv: detected a hypervisor running already");
         //return false;
     }
 
     if (cpu_info.cpuid_feature_information_ecx.virtual_machine_extensions == 0) 
     {
-        pr_info("VMX is not supported on your processor.");
+        pr_info("linux-hv: VMX is not supported on your processor.");
         return false;
     }
 

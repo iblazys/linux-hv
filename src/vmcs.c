@@ -54,6 +54,7 @@ void vmcs_setup_controls(void)
     // ------------ VM Entry Controls ------------
 
     entry.ia32e_mode_guest = true;
+    //entry.load_ia32_efer = true;
 
     vmcs_set_entry_controls(&entry);
 
@@ -73,7 +74,8 @@ void vmcs_setup_controls(void)
 
     // ------------ Procbased Controls ------------
 
-    procbased.activate_secondary_controls= true;
+    procbased.activate_secondary_controls = true;
+    //procbased.nmi_window_exiting = true;
     //ProcbasedControls.UseMsrBitmaps = TRUE;
 
     vmcs_set_procbased_controls(&procbased);
@@ -82,11 +84,11 @@ void vmcs_setup_controls(void)
 
     // ------------ Secondary Procbased Controls ------------
 
-    //SecondaryControls.EnableEpt = fa; // testing
+    secondary.enable_rdtscp = true;
+    secondary.enable_invpcid = true;
+    secondary.enable_xsaves = true;
 
-    //SecondaryControls.EnableRdtscp = TRUE;
-    //SecondaryControls.EnableInvpcid = TRUE;
-    //SecondaryControls.EnableXsaves = TRUE;
+    //secondary.unrestricted_guest = TRUE;
 
     vmcs_set_secondary_controls(&secondary);
 
@@ -153,6 +155,15 @@ void vmcs_setup_guest(struct virtual_cpu* vcpu)
     __vmx_vmwrite(VMCS_GUEST_LDTR_LIMIT, __segmentlimit(__readldtr()));
     __vmx_vmwrite(VMCS_GUEST_TR_LIMIT, __segmentlimit(__readtr()));
 
+    pr_info("[VMCSETUP] cs_limit: %08x", __segmentlimit(__readcs()));
+    pr_info("[VMCSETUP] ds_limit: %08x", __segmentlimit(__readds()));
+    pr_info("[VMCSETUP] es_limit: %08x", __segmentlimit(__reades()));
+    pr_info("[VMCSETUP] fs_limit: %08x", __segmentlimit(__readfs()));
+    pr_info("[VMCSETUP] gs_limit: %08x", __segmentlimit(__readgs()));
+    pr_info("[VMCSETUP] ss_limit: %08x", __segmentlimit(__readss()));
+    pr_info("[VMCSETUP] ldtr_limit: %08x", __segmentlimit(__readldtr()));
+    pr_info("[VMCSETUP] tr_limit: %08x", __segmentlimit(__readtr()));
+
     __sgdt(&gdtr); // Get GDTR
     __sidt(&idtr); // Get LDTR
 
@@ -190,12 +201,14 @@ void vmcs_setup_guest(struct virtual_cpu* vcpu)
 
     __vmx_vmwrite(VMCS_GUEST_DEBUGCTL, __readmsr(IA32_DEBUGCTL));
 
-    __vmx_vmwrite(VMCS_GUEST_DR7, 0x400);
+    //__vmx_vmwrite(VMCS_GUEST_DR7, 0x400);
+    __vmx_vmwrite(VMCS_GUEST_DR7, __readdr(7));
+
 
     __vmx_vmwrite(VMCS_GUEST_INTERRUPTIBILITY_STATE, 0);
     __vmx_vmwrite(VMCS_GUEST_ACTIVITY_STATE, 0); // Active state
 
-    __vmx_vmwrite(VMCS_GUEST_SYSENTER_CS, __readmsr(IA32_SYSENTER_CS));
+    __vmx_vmwrite(VMCS_GUEST_SYSENTER_CS, (uint32_t)__readmsr(IA32_SYSENTER_CS));
     __vmx_vmwrite(VMCS_GUEST_SYSENTER_EIP, __readmsr(IA32_SYSENTER_EIP));
     __vmx_vmwrite(VMCS_GUEST_SYSENTER_ESP, __readmsr(IA32_SYSENTER_ESP));
 
@@ -313,6 +326,9 @@ uint32_t vmcs_get_segment_access_rights(uint16_t _segment_selector)
     vmx_access_rights.unusable = false;
     vmx_access_rights.Reserved1 = false;
     vmx_access_rights.Reserved2 = false;
+
+    //vmx_access_rights.type = SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE;
+    //vmx_access_rights.granularity = true;
 
     return vmx_access_rights.AsUInt;
 }

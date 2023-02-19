@@ -26,6 +26,8 @@
 bool exit_handle_vmexit(uintptr_t *stack);
 void exit_handle_fail(uintptr_t *stack);
 
+bool exit_handle_invalid_guest_state(struct virtual_cpu* vcpu);
+
 /* should be called by a vmcall */
 static inline void exit_handle_vcpu_exit(struct virtual_cpu* vcpu)
 {
@@ -43,8 +45,12 @@ static inline void exit_handle_vcpu_exit(struct virtual_cpu* vcpu)
 
 	uintptr_t ret = vcpu->rip + vmread(VMCS_VMEXIT_INSTRUCTION_LENGTH);
 
-    // set rflags
-	//vcpu_vm_succeed(vcpu);
+    // set rflags to indicate successful vmcall - todo: function
+	rflags rflags;
+	rflags.AsUInt = vcpu->rflags;
+
+	vcpu->rflags &= ~(rflags.carry_flag | rflags.parity_flag | rflags.auxiliary_carry_flag |
+			rflags.zero_flag | rflags.sign_flag | rflags.overflow_flag);
 
 	uintptr_t cr3 = vmread(VMCS_GUEST_CR3);
 	write_cr3(cr3); // todo: wrapper __writec

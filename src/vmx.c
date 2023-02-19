@@ -41,7 +41,7 @@ int vmx_prepare_to_launch(struct virtual_cpu* vcpu)
 
     if(status)
     {
-        pr_err("VMXON failed with status %d\n", status);
+        pr_err("linux-hv: VMXON failed with status %d\n", status);
         return 0;
     }
 
@@ -49,7 +49,7 @@ int vmx_prepare_to_launch(struct virtual_cpu* vcpu)
 
     if(status)
     {
-        pr_err("VMCLEAR failed with status %d\n", status);
+        pr_err("linux-hv: VMCLEAR failed with status %d\n", status);
         __vmx_off();
 
         return 0;
@@ -59,7 +59,7 @@ int vmx_prepare_to_launch(struct virtual_cpu* vcpu)
 
     if(status)
     {
-        pr_err("VMCLEAR failed with status %d\n", status);
+        pr_err("linux-hv: VMPTRLD failed with status %d\n", status);
         __vmx_off();
 
         return 0;
@@ -70,6 +70,30 @@ int vmx_prepare_to_launch(struct virtual_cpu* vcpu)
 
 void vmx_adjust_control_registers(void)
 {
+    cr4 cr4, cr4_fixed = { 0 };
+    cr0 cr0, cr0_fixed = { 0 };
+
+    cr0.AsUInt = __readcr0();
+    cr4.AsUInt = __readcr4();
+
+    // fix cr0
+    cr0_fixed.AsUInt = __readmsr(IA32_VMX_CR0_FIXED0);
+    cr0.AsUInt |= cr0_fixed.AsUInt;
+
+    cr0_fixed.AsUInt = __readmsr(IA32_VMX_CR0_FIXED1);
+    cr0.AsUInt &= cr0_fixed.AsUInt;
+
+    // fix cr4
+    cr4_fixed.AsUInt = __readmsr(IA32_VMX_CR4_FIXED0);
+    cr4.AsUInt |= cr4_fixed.AsUInt;
+
+    cr4_fixed.AsUInt = __readmsr(IA32_VMX_CR4_FIXED1);
+    cr4.AsUInt &= cr4_fixed.AsUInt;
+
+    __writecr0(cr0.AsUInt);
+    __writecr4(cr4.AsUInt);
+    
+    /*
     cr4 cr4 = { 0 };
     cr0 cr0 = { 0 };
     cr_fixed cr_fixed = { 0 };
@@ -95,5 +119,6 @@ void vmx_adjust_control_registers(void)
     // write em both
     __writecr0(cr0.AsUInt);
     __writecr4(cr4.AsUInt);
+    */
 }
 

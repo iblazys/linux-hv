@@ -8,6 +8,13 @@
 #include <ntddk.h>
 #else
 
+#define __readdr(dr) __extension__ ({			\
+	unsigned long long val;				\
+	__asm __volatile("movq %%dr" #dr ", %0"		\
+			 : "=r" (val));			\
+	val;						\
+})
+
 //
 // Instead of searching through the mess of linux headers
 // for the required intrinsics, they are all here for simplicity
@@ -80,6 +87,7 @@ static inline uint64_t __readrflags(void)
 }
 
 // ---------------- VMX -------------------
+// move these to vmx.c ?
 
 static inline int __vmx_on(void* phys)
 {
@@ -142,6 +150,29 @@ static inline uint8_t __vmx_vmptrld(void* vmcs_phys_addr)
         : "cc", "memory");
 
     return ret;
+}
+
+// testing
+static inline uint64_t vmread(uint64_t field) {
+    uint64_t value;
+    asm volatile("vmread %[field], %[value]\n"
+                 : [ value ] "=r"(value)
+                 : [ field ] "r"(field)
+                 : "cc", "memory");
+    return value;
+}
+// testing
+
+static inline uint8_t __vmx_vmread(size_t field, size_t* value)
+{
+	uint8_t error;
+
+	__asm __volatile("vmread %2, %0; setna %1"
+			 : "=r" (*value), "=qm" (error)
+			 : "r" (field)
+			 : "cc");
+             
+	return error;
 }
 
 static inline uint8_t __vmx_vmwrite(uint64_t field, uint64_t value)
@@ -250,6 +281,22 @@ static inline uint64_t __loadar(uint64_t sel)
 			 : "=r" (ar)
 			 : "r" (sel));
 	return ar;
+}
+
+// testing
+static inline uint32_t __accessright(uint16_t selector)
+{
+	if (selector)
+		return (__loadar(selector) >> 8) & 0xF0FF;
+
+	/* unusable  */
+	return 0x10000;
+}
+
+
+static inline uint64_t get_canonical(uint64_t la)
+{
+	return ((int64_t)la << 16) >> 16;
 }
 
 

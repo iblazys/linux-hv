@@ -11,22 +11,23 @@ static struct vmm_state* vmm_state;
 
 int init_module(void) 
 { 
-    pr_info("hypervisor loading.\n"); 
+    pr_info("linux-hv: hypervisor loading.\n"); 
 
     vmm_state = vmm_init();
 
     if(!vmm_state)
     {
-        pr_err("hypervisor failed to load");
+        pr_err("linux-hv: hypervisor failed to load");
+        return 0;
     }
 
-    pr_info("hypervisor loaded.\n");
+    pr_info("linux-hv: hypervisor loaded.\n");
 
 
     // DEBUG 
-    pr_info("shutting down hypervisor");
+    //pr_info("shutting down hypervisor");
    
-    pr_info("hypervisor shutdown successfully");
+    //pr_info("hypervisor shutdown successfully");
     // DEBUG
 
 

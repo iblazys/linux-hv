@@ -14,8 +14,8 @@ struct virtual_cpu
     // The id of the current processor
     uint32_t    processor_id;
 
-    // Has memory been allocated
-    bool        is_loaded;
+    // Has vmxon/vmxoff been called
+    bool        is_virtualized;
 
     // Did the launch fail
     bool        launch_failed;
@@ -27,6 +27,7 @@ struct virtual_cpu
 
     uint64_t    rip;
     uint64_t    rsp;
+    uintptr_t*   host_sp;
     
     uint64_t    rflags;
 
@@ -53,7 +54,9 @@ struct vmm_state
 struct vmm_state* vmm_init(void);
 struct vmm_state* vmm_allocate_vmm_state(void);
 struct virtual_cpu* vmm_allocate_virtual_cpus(uint32_t num_of_cpus);
+
 int vmm_allocate_saved_state(struct virtual_cpu* vcpu);
+void vmm_free_saved_state(struct virtual_cpu* vcpu);
 
 void vmm_virtualize_single_cpu(void* info, uintptr_t gsp, uintptr_t gip);
 

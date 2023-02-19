@@ -44,10 +44,7 @@ bool exit_handle_vmexit(uintptr_t *stack)
 
         case VMX_EXIT_REASON_ERROR_INVALID_GUEST_STATE:
         {
-            pr_info("entry with invalid guest state!");
-            validate_guest_entry_state();
-            exit_handle_vcpu_exit(vcpu);
-            return false;
+            return exit_handle_invalid_guest_state(vcpu);
 
             break;
         }
@@ -61,4 +58,27 @@ bool exit_handle_vmexit(uintptr_t *stack)
 void exit_handle_fail(uintptr_t *stack)
 {
     pr_info("exit failed");
+}
+
+bool exit_handle_invalid_guest_state(struct virtual_cpu* vcpu)
+{
+    pr_info("linux-hv: vmexit with invalid guest state!");
+
+    // todo: dump state
+
+    // This will check the guest state and trigger an assert
+    // if any of the checks fail.
+    validate_guest_entry_state();
+
+    // Incase the above checks do not find anything (thanks intel)
+    // then turn off vmx and let the vmm know we have called vmxoff
+    // for this virtual cpu already
+    
+    // This is only temporary, until I can find the fucking cause of the invalid guest state.
+    // Eventually you would want this to trigger a kernel panic.
+    exit_handle_vcpu_exit(vcpu);
+
+    vcpu->is_virtualized = false;
+
+    return false;
 }

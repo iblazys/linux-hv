@@ -8,6 +8,9 @@ struct vmm_state* vmm_init(void)
 {
     struct vmm_state* vmm;
     unsigned int processorCount;
+    int status = 0xBEEF;
+
+    processorCount = num_online_cpus();
 
     // Check vmx support
     if(!cpu_supports_vmx())
@@ -15,8 +18,6 @@ struct vmm_state* vmm_init(void)
         // Handled
         return NULL;
     }
-
-    processorCount = num_online_cpus();
 
     if(!(vmm = vmm_allocate_vmm_state()))
     {
@@ -31,7 +32,9 @@ struct vmm_state* vmm_init(void)
         return NULL;
     }
 
-    // Set state
+    // allocate saved cpu state here?
+
+    // Set vmm state
     vmm->number_of_cpus = processorCount;
 
     /* 
@@ -39,10 +42,12 @@ struct vmm_state* vmm_init(void)
     which ends up calling vmm_virtualize_single_cpu
     */
 
-    on_each_cpu((void*)__vmx_vminit, vmm, true);
+    status = __vmx_vminit(vmm);
+    //on_each_cpu((void*)__vmx_vminit, vmm, true);
 
-    // TODO: Error handling below
-    vmm->init_status = true;
+    /* Guest resumes here */
+
+    pr_info("linux-hv: __vmx_vminit status %d", status);
 
     return vmm;
 }
@@ -80,19 +85,32 @@ int vmm_allocate_saved_state(struct virtual_cpu* vcpu)
     return 1;
 }
 
-//
-// called from __vmx_vminit in vmx_asm.S
-// Initializes a single processor and launches the vm
-//
+void vmm_free_saved_state(struct virtual_cpu *vcpu)
+{
+    kfree(vcpu->saved_state);
+}
+
+/*
+* This function is called from __vmx_vminit, which is in assembly.
+*
+* Note: that we end up in vmm_init anyway regardless of failure or
+* success, but the difference is, if we fail, __vmx_vmlaunch() will give
+* us back control instead of directly ending up in vmm_init.
+*
+* The guest start is do_resume in assembly, which returns to vmm_init.
+*	The following are restored on entry:
+*		- GUEST_RFLAGS
+*		- Guest registers
+*/
 void vmm_virtualize_single_cpu(void* info, uintptr_t gsp, uintptr_t gip)
-{    
+{   
     unsigned int processor_id = smp_processor_id();
 
     struct vmm_state* vmm = info;
     struct virtual_cpu* vcpu = &vmm->guest_cpus[processor_id];
     vcpu->processor_id = processor_id;
 
-    pr_info("virtualizing processor %d", vcpu->processor_id);
+    pr_info("linux-hv: virtualizing processor %d", vcpu->processor_id);
 
     // enable vmx operation in cr4
     cpu_enable_vmx_operation();
@@ -125,6 +143,7 @@ void vmm_virtualize_single_cpu(void* info, uintptr_t gsp, uintptr_t gip)
     {
         vmx_free_vmxon_region(vcpu);
         vmcs_free_vmcs_region(vcpu);
+        vmm_free_saved_state(vcpu);
 
         vcpu->launch_failed = true;
 
@@ -142,12 +161,16 @@ void vmm_virtualize_single_cpu(void* info, uintptr_t gsp, uintptr_t gip)
     // setup vmcs
     vmcs_setup_vmcs(vcpu);
 
-    pr_info("ready to launch vm on cpu %d", vcpu->processor_id);
+    pr_info("linux-hv: launching vm on cpu %d", vcpu->processor_id);
+
+    // vmxon has been called at this point
+    vcpu->is_virtualized = true;
 
     // call vmlaunch
-    __vmx_vmlaunch();
+    uint8_t result;
+    result = __vmx_vmlaunch();
 
-    pr_info("WE FAILED!!");
+    pr_info("linux-hv: VMLAUNCH failed with reason: 0x%x", result);
 }
 
 //
@@ -167,19 +190,20 @@ void vmm_shutdown_cpu(struct vmm_state* vmm)
 {
     struct virtual_cpu* vcpu = &vmm->guest_cpus[smp_processor_id()];
 
-    pr_info("shutting down vm on cpu: %d", vcpu->processor_id);
-
     if(vcpu->launch_failed)
     {
         /*  
-        The virtual cpu freed and shutdown if the launch fails
-        see vmm_virtual_single_cpu and vmx_prepare_to_launch
+        The virtual cpu is already freed and shutdown if the launch fails
+        - see vmm_virtual_single_cpu and vmx_prepare_to_launch
         */
         return;
     }
-    
-    // Turn vmx off
-    __vmx_off();
+
+    pr_info("shutting down vm on cpu: %d", vcpu->processor_id);
+
+    // Turn vmx off only if it still on, as it might be turned off in the case of a vmexit error.
+    if(vcpu->is_virtualized)
+        __vmx_off();
 
     // Disable vmx in cr4
 
@@ -188,8 +212,7 @@ void vmm_shutdown_cpu(struct vmm_state* vmm)
     // Free vm regions
     vmx_free_vmxon_region(vcpu);
     vmcs_free_vmcs_region(vcpu);
-
-    //vmm_free_saved_state(vcpu); -- TODO
+    vmm_free_saved_state(vcpu);
 }
 
 //
