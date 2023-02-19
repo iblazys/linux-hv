@@ -420,23 +420,53 @@ void validate_guest_entry_state(void)
     base_address = __readmsr(VMCS_GUEST_IDTR_BASE);
     validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
 
+    // Bits 31:16 of each limit field must be 0
+    //uint64_t gdtr_limit = __readmsr(VMCS_GUEST_GDTR_LIMIT);
+    //uint64_t idtr_limit = __readmsr(VMCS_GUEST_IDTR_LIMIT);
+    // TODO
+
+
     //
     // 26.3.1.4 Checks on Guest RIP, RFLAGS, and SSP
     //
-    vmx_segment_access_rights csAccessRights;
 
+    //
+    // RIP
+    //
+
+    // Bits 63:32 must be 0 if the “IA-32e mode guest” VM-entry control is 0 or if the L bit (bit 13) in the access-
+    // rights field for CS is 0
+    vmx_segment_access_rights csAccessRights;
     csAccessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_CS_ACCESS_RIGHTS);
+
     if ((entry_controls.ia32e_mode_guest == 0) ||
         (csAccessRights.long_mode == 0))
     {
         ASSERT((vmread(VMCS_GUEST_RIP) & ~__UINT16_MAX__) == 0);
     }
 
+    //
+    // RFLAGS
+    //
+
+    // Reserved bits 63:22 (bits 31:22 on processors that do not support Intel 64 architecture), bit 15, bit 5 and
+    // bit 3 must be 0 in the field, and reserved bit 1 must be 1.
     ASSERT(rflags.Reserved1 == 0);
     ASSERT(rflags.Reserved2 == 0);
     ASSERT(rflags.Reserved3 == 0);
     ASSERT(rflags.Reserved4 == 0);
     ASSERT(rflags.read_as_1 == 1);
+
+    // The VM flag (bit 17) must be 0 either if the “IA-32e mode guest” VM-entry control is 1 or if bit 0 in the CR0
+    // field (corresponding to CR0.PE) is 0.
+    if((entry_controls.ia32e_mode_guest == 1) ||
+        (cr0.protection_enable == 0))
+    {
+        ASSERT(rflags.virtual_8086_mode_flag == 0);
+    }
+
+    // The IF flag (RFLAGS[bit 9]) must be 1 if the valid bit (bit 31) in the VM-entry interruption-information field
+    // is 1 and the interruption type (bits 10:8) is external interrupt
     if ((interrupt_info.valid == 1) &&
         (interrupt_info.interruption_type == external_interrupt))
     {
@@ -444,8 +474,15 @@ void validate_guest_entry_state(void)
     }
 
     //
+    // SSP. The following checks are performed if the “load CET state” VM-entry control is 1
+    //
+    ASSERT(entry_controls.load_cet_state == 0); // not implemented
+    
+
+    //
     // 26.3.1.5 Checks on Guest Non-Register State
     //
+
     vmx_interruptibility_state interruptibilityState;
     vmx_guest_activity_state activityState;
     vmx_segment_access_rights ssAccessRights;
@@ -457,35 +494,75 @@ void validate_guest_entry_state(void)
     //
     // Activity state
     //
+
+    /*
+    The activity-state field must contain a value in the range 0 – 3, indicating an activity state supported by the
+    implementation (see Section 25.4.2). Future processors may include support for other activity states.
+    Software should read the VMX capability MSR IA32_VMX_MISC (see Appendix A.6) to determine what
+    activity states are supported
+    */
+
     ASSERT((activityState == vmx_active) ||
               (activityState == vmx_hlt) ||
               (activityState == vmx_shutdown) ||
               (activityState == vmx_wait_for_sipi));
+
+    /*
+    The activity-state field must not indicate the HLT state if the DPL (bits 6:5) in the access-rights field for SS
+    is not 0. 
+    */
     if (ssAccessRights.descriptor_privilege_level != 0)
     {
         ASSERT(activityState != vmx_hlt);
     }
+
+    /*
+    The activity-state field must indicate the active state if the interruptibility-state field indicates blocking by
+    either MOV-SS or by STI (if either bit 0 or bit 1 in that field is 1)
+    */
     if ((interruptibilityState.blocking_by_sti == 1) ||
         (interruptibilityState.blocking_by_mov_ss == 1))
     {
         ASSERT(activityState != vmx_active);
     }
 
+    /*
+    If the valid bit (bit 31) in the VM-entry interruption-information field is 1, the interruption to be delivered
+    (as defined by interruption type and vector) must not be one that would normally be blocked while a logical
+    processor is in the activity state corresponding to the contents of the activity-state field. The following
+    items enumerate the interruptions (as specified in the VM-entry interruption-information field) whose
+    injection is allowed for the different activity states
+
+    See Table 25-16 in Section 25.8.3 for details regarding the format of the VM-entry interruption-
+    information field.
+    */
+
     if (interrupt_info.valid == 1)
     {
+        /*
+        HLT. The only events allowed are the following:
+        */
         if (activityState == vmx_hlt)
         {
+            // Those with interruption type external interrupt or non-maskable interrupt (NMI)
             if ((interrupt_info.interruption_type == external_interrupt) ||
                 (interrupt_info.interruption_type == non_maskable_interrupt))
             {
                 ;
             }
+
+            /*
+            Those with interruption type hardware exception and vector 1 (debug exception) or vector 18
+            (machine-check exception)
+            */
             else if ((interrupt_info.interruption_type == hardware_exception) &&
                      ((interrupt_info.vector == debug) ||
                       (interrupt_info.vector == machine_check)))
             {
                 ;
             }
+
+            // Those with interruption type other event and vector 0 (pending MTF VM exit)
             else if ((interrupt_info.interruption_type == other_event) &&
                      (interrupt_info.vector == 0 /* pending MTF VM exit */ ))
             {
@@ -493,19 +570,30 @@ void validate_guest_entry_state(void)
             }
             else
             {
+                // Unallowed interrupt
                 ASSERT(false);
             }
         }
+
+        /*
+        Shutdown. Only NMIs and machine-check exceptions are allowed
+        */
         else if (activityState == vmx_shutdown)
         {
             ASSERT((interrupt_info.vector == nmi) ||
                       (interrupt_info.vector == machine_check));
         }
+
+        /* 
+        Wait-for-SIPI. No interruptions are allowed.
+        */
         else if (activityState == vmx_wait_for_sipi)
         {
             ASSERT(false);
         }
     }
+
+    // The activity-state field must not indicate the wait-for-SIPI state if the “entry to SMM” VM-entry control is 1
     if (entry_controls.entry_to_smm == 1)
     {
         ASSERT(activityState != vmx_wait_for_sipi);
@@ -514,14 +602,25 @@ void validate_guest_entry_state(void)
     //
     // Interruptibility state
     //
+
+    // The reserved bits (bits 31:5) must be 0
     ASSERT(interruptibilityState.Reserved1 == 0);
+
+    // The field cannot indicate blocking by both STI and MOV SS (bits 0 and 1 cannot both be 1)
     ASSERT((interruptibilityState.blocking_by_sti == false) ||
               (interruptibilityState.blocking_by_mov_ss == false));
 
+    // Bit 0 (blocking by STI) must be 0 if the IF flag (bit 9) is 0 in the RFLAGS field
     if (rflags.interrupt_enable_flag == 0)
     {
         ASSERT(interruptibilityState.blocking_by_sti == 0);
     }
+
+    /*
+    Bit 0 (blocking by STI) and bit 1 (blocking by MOV-SS) must both be 0 if the valid bit (bit 31) in the
+    VM-entry interruption-information field is 1 and the interruption type (bits 10:8) in that field has value 0,
+    indicating external interrupt, or value 2, indicating non-maskable interrupt (NMI)
+    */
     if ((interrupt_info.valid == 1) &&
         ((interrupt_info.interruption_type == external_interrupt) ||
          (interrupt_info.interruption_type == non_maskable_interrupt)))
@@ -529,25 +628,50 @@ void validate_guest_entry_state(void)
         ASSERT(interruptibilityState.blocking_by_sti == 0);
         ASSERT(interruptibilityState.blocking_by_mov_ss == 0);
     }
+
+    // Bit 2 (blocking by SMI) must be 0 if the processor is not in SMM
     ASSERT(interruptibilityState.blocking_by_smi == 0);
+
+    // Bit 2 (blocking by SMI) must be 1 if the “entry to SMM” VM-entry control is 1
     if (entry_controls.entry_to_smm == 1)
     {
         ASSERT(interruptibilityState.blocking_by_smi == 1);
     }
+
+    /*
+    Bit 3 (blocking by NMI) must be 0 if the “virtual NMIs” VM-execution control is 1, the valid bit (bit 31) in the
+    VM-entry interruption-information field is 1, and the interruption type (bits 10:8) in that field has value 2
+    (indicating NMI).
+    */
     if ((pinbased_controls.virtual_nmi == 1) &&
         (interrupt_info.valid == 1) &&
         (interrupt_info.interruption_type == non_maskable_interrupt))
     {
         ASSERT(interruptibilityState.blocking_by_nmi == 0);
     }
+
+    /*
+    If bit 4 (enclave interruption) is 1, bit 1 (blocking by MOV-SS) must be 0 and the processor must support
+    for SGX by enumerating CPUID.(EAX=07H,ECX=0):EBX.SGX[bit 2] as 1.
+    */
     if (interruptibilityState.enclave_interruption == 1)
     {
         ASSERT(interruptibilityState.blocking_by_mov_ss == 0);
+
+        // todo: cpuid
     }
+    
+    //
+    // Pending debug exceptions
+    //
+
+    /*
+    Bits 11:4, bit 13, bit 15, and bits 63:17 (bits 31:17 on processors that do not support Intel 64 archi-
+    tecture) must be 0
+    */
 
     //
-    // Pending debug exceptions checks not implemented
-    // VMCS link pointer checks not implemented
+    // VMCS link pointer checks
     //
         // TODO
 
@@ -560,7 +684,7 @@ void validate_guest_entry_state(void)
     {
         // Those checks are not implemented.
 
-        // TODO
+        // A VM entry to a guest that does not use PAE paging does not check the validity of any PDPTEs.
     }
 }
 
@@ -1273,6 +1397,7 @@ void validate_segment_access_rights(segment_type segment_type,
             break;
         }
 
+        // ------ TR CHECKS -------
         case SegmentTr:
         {
             //
@@ -1313,19 +1438,33 @@ void validate_segment_access_rights(segment_type segment_type,
             // If any bit in the limit field in the range 11:0 is 0, G must be 0.
             unsigned int mask = 0xFFF;
 
+            if (!MV_IS_FLAG_SET(segment_limit, 0xfff))
+            {
+                ASSERT(accessRights.granularity == 0);
+            }
+
+            /*
             if((segment_limit & mask) != mask)
             {
                 // At least one bit in range 11:0 is 0
                 ASSERT(accessRights.granularity == 0);
             }
+            */
 
             // If any bit in the limit field in the range 31:20 is 1, G must be 1
-            mask = 0xFFFFF000;
-
-            if((segment_limit & mask) != mask)
+            if (MV_IS_FLAG_SET(segment_limit, 0xfff00000))
             {
                 ASSERT(accessRights.granularity == 1);
             }
+
+            /*
+            mask = 0xFFFFF000;
+
+            if((segment_limit & mask) != 0)
+            {
+                ASSERT(accessRights.granularity == 1);
+            }
+            */
 
             //
             // Bit 16 (Unusable). The unusable bit must be 0.
@@ -1340,54 +1479,59 @@ void validate_segment_access_rights(segment_type segment_type,
             break;
         }
 
+        // ------ LDTR CHECKS -------
         case SegmentLdtr:
         {
-            //
-            // Bits 3:0 (Type). The Type must be 2 (LDT)
-            //
-            ASSERT(accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE);
-
-            //
-            // Bit 4 (S). S must be 0.
-            //
-            ASSERT(accessRights.descriptor_type == 0);
-
-            //
-            // Bit 7 (P). P must be 1.
-            //
-            ASSERT(accessRights.present == 1);
-
-            //
-            // Bits 11:8 (reserved). These bits must all be 0
-            //
-            ASSERT(accessRights.Reserved1 == 0);
-
-            //
-            // Bit 15 (G)
-            //
-
-            // If any bit in the limit field in the range 11:0 is 0, G must be 0.
-            unsigned int mask = 0xFFF;
-
-            if((segment_limit & mask) != mask)
+            // The following checks on the different sub-fields apply only if LDTR is usable
+            if(accessRights.unusable == 0)
             {
-                // At least one bit in range 11:0 is 0
-                ASSERT(accessRights.granularity == 0);
+                //
+                // Bits 3:0 (Type). The Type must be 2 (LDT)
+                //
+                ASSERT(accessRights.type == SEGMENT_DESCRIPTOR_TYPE_DATA_READ_WRITE);
+
+                //
+                // Bit 4 (S). S must be 0.
+                //
+                ASSERT(accessRights.descriptor_type == 0);
+
+                //
+                // Bit 7 (P). P must be 1.
+                //
+                ASSERT(accessRights.present == 1);
+
+                //
+                // Bits 11:8 (reserved). These bits must all be 0
+                //
+                ASSERT(accessRights.Reserved1 == 0);
+
+                //
+                // Bit 15 (G)
+                //
+
+                // If any bit in the limit field in the range 11:0 is 0, G must be 0.
+                unsigned int mask = 0xFFF;
+
+                if((segment_limit & mask) != mask)
+                {
+                    // At least one bit in range 11:0 is 0
+                    ASSERT(accessRights.granularity == 0);
+                }
+
+                // If any bit in the limit field in the range 31:20 is 1, G must be 1
+                mask = 0xFFFFF000;
+
+                if((segment_limit & mask) != mask)
+                {
+                    ASSERT(accessRights.granularity == 1);
+                }
+
+                //
+                // Bits 31:17 (reserved). These bits must all be 0
+                //
+
+                ASSERT(accessRights.Reserved2 == 0);
             }
-
-            // If any bit in the limit field in the range 31:20 is 1, G must be 1
-            mask = 0xFFFFF000;
-
-            if((segment_limit & mask) != mask)
-            {
-                ASSERT(accessRights.granularity == 1);
-            }
-
-            //
-            // Bits 31:17 (reserved). These bits must all be 0
-            //
-
-            ASSERT(accessRights.Reserved2 == 0);
 
             break;
         }
