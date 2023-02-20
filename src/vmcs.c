@@ -36,14 +36,14 @@ void vmcs_setup_vmcs(struct virtual_cpu *vcpu)
     pr_info("setting up vmcs on procesor %d", vcpu->processor_id);
 
     // TODO: save controls in vmm_state somewhere
-    vmcs_setup_controls();
+    vmcs_setup_controls(vcpu);
 
     vmcs_setup_guest(vcpu);
     vmcs_setup_host(vcpu);
 }
 
 //
-void vmcs_setup_controls(void)
+void vmcs_setup_controls(struct virtual_cpu* vcpu)
 {
     ia32_vmx_pinbased_ctls_register pinbased = { 0 };
     ia32_vmx_procbased_ctls_register procbased = { 0 };
@@ -54,7 +54,6 @@ void vmcs_setup_controls(void)
     // ------------ VM Entry Controls ------------
 
     entry.ia32e_mode_guest = true;
-    //entry.load_ia32_efer = true;
 
     vmcs_set_entry_controls(&entry);
 
@@ -75,8 +74,7 @@ void vmcs_setup_controls(void)
     // ------------ Procbased Controls ------------
 
     procbased.activate_secondary_controls = true;
-    //procbased.nmi_window_exiting = true;
-    //ProcbasedControls.UseMsrBitmaps = TRUE;
+    procbased.use_msr_bitmaps = true;
 
     vmcs_set_procbased_controls(&procbased);
 
@@ -87,8 +85,6 @@ void vmcs_setup_controls(void)
     secondary.enable_rdtscp = true;
     secondary.enable_invpcid = true;
     secondary.enable_xsaves = true;
-
-    //secondary.unrestricted_guest = TRUE;
 
     vmcs_set_secondary_controls(&secondary);
 
@@ -124,7 +120,7 @@ void vmcs_setup_controls(void)
     __vmx_vmwrite(VMCS_CTRL_CR4_READ_SHADOW, 0);
     // end testing
 
-    __vmx_vmwrite(VMCS_CTRL_MSR_BITMAP_ADDRESS, 0);
+    __vmx_vmwrite(VMCS_CTRL_MSR_BITMAP_ADDRESS, __pa(vcpu->vmm->msr_bitmap));
 }
 
 void vmcs_setup_guest(struct virtual_cpu* vcpu)
@@ -155,15 +151,6 @@ void vmcs_setup_guest(struct virtual_cpu* vcpu)
     __vmx_vmwrite(VMCS_GUEST_LDTR_LIMIT, __segmentlimit(__readldtr()));
     __vmx_vmwrite(VMCS_GUEST_TR_LIMIT, __segmentlimit(__readtr()));
 
-    pr_info("[VMCSETUP] cs_limit: %08x", __segmentlimit(__readcs()));
-    pr_info("[VMCSETUP] ds_limit: %08x", __segmentlimit(__readds()));
-    pr_info("[VMCSETUP] es_limit: %08x", __segmentlimit(__reades()));
-    pr_info("[VMCSETUP] fs_limit: %08x", __segmentlimit(__readfs()));
-    pr_info("[VMCSETUP] gs_limit: %08x", __segmentlimit(__readgs()));
-    pr_info("[VMCSETUP] ss_limit: %08x", __segmentlimit(__readss()));
-    pr_info("[VMCSETUP] ldtr_limit: %08x", __segmentlimit(__readldtr()));
-    pr_info("[VMCSETUP] tr_limit: %08x", __segmentlimit(__readtr()));
-
     __sgdt(&gdtr); // Get GDTR
     __sidt(&idtr); // Get LDTR
 
@@ -173,10 +160,10 @@ void vmcs_setup_guest(struct virtual_cpu* vcpu)
     __vmx_vmwrite(VMCS_GUEST_IDTR_BASE, idtr.base_address);
 
     // Bases
-    __vmx_vmwrite(VMCS_GUEST_ES_BASE, vmcs_get_segment_base(gdtr.base_address, __reades()));
-    __vmx_vmwrite(VMCS_GUEST_CS_BASE, vmcs_get_segment_base(gdtr.base_address, __readcs()));
-    __vmx_vmwrite(VMCS_GUEST_SS_BASE, vmcs_get_segment_base(gdtr.base_address, __readss()));
-    __vmx_vmwrite(VMCS_GUEST_DS_BASE, vmcs_get_segment_base(gdtr.base_address, __readds()));
+    __vmx_vmwrite(VMCS_GUEST_ES_BASE, 0);
+    __vmx_vmwrite(VMCS_GUEST_CS_BASE, 0);
+    __vmx_vmwrite(VMCS_GUEST_SS_BASE, 0);
+    __vmx_vmwrite(VMCS_GUEST_DS_BASE, 0);
     __vmx_vmwrite(VMCS_GUEST_FS_BASE, __readmsr(IA32_FS_BASE));
     __vmx_vmwrite(VMCS_GUEST_GS_BASE, __readmsr(IA32_GS_BASE));
     __vmx_vmwrite(VMCS_GUEST_LDTR_BASE, vmcs_get_segment_base(gdtr.base_address, __readldtr()));
@@ -198,13 +185,12 @@ void vmcs_setup_guest(struct virtual_cpu* vcpu)
     __vmx_vmwrite(VMCS_GUEST_CR0, __readcr0());
     __vmx_vmwrite(VMCS_GUEST_CR3, __readcr3());
     __vmx_vmwrite(VMCS_GUEST_CR4, __readcr4());
+    __vmx_vmwrite(VMCS_GUEST_DR7, __readdr(7));
 
     __vmx_vmwrite(VMCS_GUEST_DEBUGCTL, __readmsr(IA32_DEBUGCTL));
 
     //__vmx_vmwrite(VMCS_GUEST_DR7, 0x400);
-    __vmx_vmwrite(VMCS_GUEST_DR7, __readdr(7));
-
-
+    __vmx_vmwrite(VMCS_GUEST_PENDING_DEBUG_EXCEPTIONS, 0);
     __vmx_vmwrite(VMCS_GUEST_INTERRUPTIBILITY_STATE, 0);
     __vmx_vmwrite(VMCS_GUEST_ACTIVITY_STATE, 0); // Active state
 
@@ -263,7 +249,7 @@ uint64_t vmcs_get_segment_base(uint64_t gdt_base, uint16_t _selector)
     segment_descriptor_32* descriptor_table = { 0 };
 
     selector.AsUInt = _selector;
-
+    
     if (selector.table == 0 && selector.index == 0)
     {
         return segment_base; // already 0;

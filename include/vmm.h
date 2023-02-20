@@ -47,6 +47,8 @@ struct vmm_state
     uint32_t number_of_cpus;
     struct virtual_cpu* guest_cpus;
 
+    __align(__PAGE_SIZE) uint8_t msr_bitmap[__PAGE_SIZE];
+
     // controls
     // capabilites
 };

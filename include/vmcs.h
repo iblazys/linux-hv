@@ -9,7 +9,7 @@ void vmcs_free_vmcs_region(struct virtual_cpu* vcpu);
 
 // The motherlode
 void vmcs_setup_vmcs(struct virtual_cpu* vcpu);
-void vmcs_setup_controls(void);
+void vmcs_setup_controls(struct virtual_cpu* vcpu);
 void vmcs_setup_guest(struct virtual_cpu* vcpu);
 void vmcs_setup_host(struct virtual_cpu* vcpu);
 

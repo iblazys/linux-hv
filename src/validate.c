@@ -30,6 +30,8 @@ void validate_guest_entry_state(void)
 {
     // WHY INTEL.... WHY
 
+    pr_info("linux-hv: validating guest entry state...");
+
     vmentry_interrupt_information interrupt_info;
     ia32_vmx_entry_ctls_register entry_controls;
     ia32_vmx_pinbased_ctls_register pinbased_controls;
@@ -37,8 +39,8 @@ void validate_guest_entry_state(void)
     ia32_vmx_procbased_ctls2_register secondary_controls;
 
     rflags rflags;
-
     bool unrestricted_guest;
+    uint32_t physical_address_width_in_bits;
 
     rflags.AsUInt = vmread(VMCS_GUEST_RFLAGS);
 
@@ -51,8 +53,13 @@ void validate_guest_entry_state(void)
     unrestricted_guest = ((procbased_controls.activate_secondary_controls == 1) &&
                          (secondary_controls.unrestricted_guest == 1));
 
+    cpuid_eax_80000008 cpuid;
+    __get_cpuid(0x80000008, &cpuid.eax.AsUInt, &cpuid.ebx.AsUInt, &cpuid.ecx.AsUInt, &cpuid.edx.AsUInt);
+
+    physical_address_width_in_bits = cpuid.eax.number_of_physical_address_bits;
+
     //
-    // 26.3.1.1 Checks on Guest Control Registers, Debug Registers, and MSRs
+    // 27.3.1.1 Checks on Guest Control Registers, Debug Registers, and MSRs
     //
 
     cr0 cr0 = { 0 };
@@ -102,10 +109,15 @@ void validate_guest_entry_state(void)
         ASSERT(cr0.paging_enable == 1);
         ASSERT(cr4.physical_address_extension == 1);
     }
+    
+
+    // If the “IA-32e mode guest” VM-entry control is 0, bit 17 in the CR4 field (corresponding to CR4.PCIDE)
+    // must be 0 - not implemented
+
 
     // The CR3 field must be such that bits 63:52 and bits in the range 51:32 beyond the processor’s 
     // physical address width are 0.
-    // TODO
+    ASSERT(validate_is_within_physical_width(physical_address_width_in_bits, __readcr3()) == 1);
 
     // If the “load debug controls” VM-entry control is 1, bits 63:32 in the DR7 field must be 0. The first processors
     // to support the virtual-machine extensions supported only the 1-setting of this control and thus performed
@@ -129,20 +141,6 @@ void validate_guest_entry_state(void)
     validate_is_canonical_address((void*)sysenter_esp, __FILE__, __LINE__);
     validate_is_canonical_address((void*)sysenter_eip, __FILE__, __LINE__);
 
-/*
-    if(!is_canonical_address((void*)sysenter_eip, __FILE__, __LINE__))
-    {
-        pr_info("ADDRESS NOT CANONICAL: sysenter_esp: 0x%llx", sysenter_esp);
-        ASSERT(false);
-    }
-
-    if(!is_canonical_address((void*)sysenter_esp, __FILE__, __LINE__))
-    {
-        pr_info("ADDRESS NOT CANONICAL: sysenter_eip: 0x%llx", sysenter_eip);
-        ASSERT(false);
-    }
-*/
-
     // If the “load CET state” VM-entry control is 1, the IA32_S_CET field and the
     // IA32_INTERRUPT_SSP_TABLE_ADDR field must contain canonical addresses.
     ASSERT(entry_controls.load_cet_state == 0);
@@ -159,7 +157,7 @@ void validate_guest_entry_state(void)
     // If the “load IA32_PAT” VM-entry control is 1, the value of the field for the IA32_PAT MSR must be one that could
     // be written by WRMSR without fault at CPL 0. Specifically, each of the 8 bytes in the field must have one of the
     // values 0 (UC), 1 (WC), 4 (WT), 5 (WP), 6 (WB), or 7 (UC-).
-    // TODO
+    ASSERT(entry_controls.load_ia32_pat == 0); // not implemented
 
     // If the “load IA32_EFER” VM-entry control is 1 ...
     if (entry_controls.load_ia32_efer == 1)
@@ -211,7 +209,7 @@ void validate_guest_entry_state(void)
 
 
     //
-    // 26.3.1.2 Checks on Guest Segment Registers
+    // 27.3.1.2 Checks on Guest Segment Registers
     //
 
     // This section specifies the checks on the fields for CS, SS, DS, ES, FS, GS, TR, and LDTR
@@ -274,13 +272,13 @@ void validate_guest_entry_state(void)
         // TR, FS, GS. The address must be canonical.
         uint64_t base_address;
 
-        base_address = __readmsr(VMCS_GUEST_TR_BASE);
+        base_address = vmread(VMCS_GUEST_TR_BASE);
         validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
 
-        base_address = __readmsr(VMCS_GUEST_FS_BASE);
+        base_address = vmread(VMCS_GUEST_FS_BASE);
         validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
 
-        base_address = __readmsr(VMCS_GUEST_GS_BASE);
+        base_address = vmread(VMCS_GUEST_GS_BASE);
         validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
 
         // LDTR. If LDTR is usable, the address must be canonical
@@ -288,33 +286,35 @@ void validate_guest_entry_state(void)
 
         if(accessRights.unusable == 0)
         {
-            base_address = __readmsr(VMCS_GUEST_LDTR_BASE);
+            base_address = vmread(VMCS_GUEST_LDTR_BASE);
             validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
         }
 
         // CS. Bits 63:32 of the address must be zero.
-        base_address = __readmsr(VMCS_GUEST_CS_BASE);    
+        base_address = vmread(VMCS_GUEST_CS_BASE);
+        pr_info("CS_BASE: %llx", base_address);
+           
         ASSERT((base_address >> 32) == 0);
 
         // SS, DS, ES. If the register is usable, bits 63:32 of the address must be zero.
         accessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_SS_ACCESS_RIGHTS);
         if(accessRights.unusable == 0)
         {
-            base_address = __readmsr(VMCS_GUEST_SS_BASE);
+            base_address = vmread(VMCS_GUEST_SS_BASE);
             ASSERT((base_address >> 32) == 0);
         }
 
         accessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_DS_ACCESS_RIGHTS);
         if(accessRights.unusable == 0)
         {
-            base_address = __readmsr(VMCS_GUEST_DS_BASE);
+            base_address = vmread(VMCS_GUEST_DS_BASE);
             ASSERT((base_address >> 32) == 0);
         }
 
         accessRights.AsUInt = (uint32_t)vmread(VMCS_GUEST_ES_ACCESS_RIGHTS);
         if(accessRights.unusable == 0)
         {
-            base_address = __readmsr(VMCS_GUEST_ES_BASE);
+            base_address = vmread(VMCS_GUEST_ES_BASE);
             ASSERT((base_address >> 32) == 0);
         }
 
@@ -407,24 +407,27 @@ void validate_guest_entry_state(void)
     }
 
     //
-    // 26.3.1.3 Checks on Guest Descriptor-Table Registers
+    // 27.3.1.3 Checks on Guest Descriptor-Table Registers
     //
 
     // The following checks are performed on the fields for GDTR and IDTR
 
     // On processors that support Intel 64 architecture, the base-address fields must contain canonical addresses
 
-    base_address = __readmsr(VMCS_GUEST_GDTR_BASE);
+    base_address = vmread(VMCS_GUEST_GDTR_BASE);
     validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
 
-    base_address = __readmsr(VMCS_GUEST_IDTR_BASE);
+    base_address = vmread(VMCS_GUEST_IDTR_BASE);
     validate_is_canonical_address((void*)base_address, __FILE__, __LINE__);
 
     // Bits 31:16 of each limit field must be 0
-    //uint64_t gdtr_limit = __readmsr(VMCS_GUEST_GDTR_LIMIT);
-    //uint64_t idtr_limit = __readmsr(VMCS_GUEST_IDTR_LIMIT);
-    // TODO
+    uint64_t gdtr_limit = vmread(VMCS_GUEST_GDTR_LIMIT);
+    uint64_t idtr_limit = vmread(VMCS_GUEST_IDTR_LIMIT);
 
+    pr_info("gdtr limit: %llx", gdtr_limit); // WHY 0 DAFUQ
+    pr_info("idtr limit: %llx", idtr_limit); // same here
+
+        // TODO
 
     //
     // 26.3.1.4 Checks on Guest RIP, RFLAGS, and SSP
@@ -686,6 +689,10 @@ void validate_guest_entry_state(void)
 
         // A VM entry to a guest that does not use PAE paging does not check the validity of any PDPTEs.
     }
+
+    pr_info("linux-hv: reached end of guest validation.");
+
+    // now wut
 }
 
 /**
@@ -1436,35 +1443,16 @@ void validate_segment_access_rights(segment_type segment_type,
             //
 
             // If any bit in the limit field in the range 11:0 is 0, G must be 0.
-            unsigned int mask = 0xFFF;
-
             if (!MV_IS_FLAG_SET(segment_limit, 0xfff))
             {
                 ASSERT(accessRights.granularity == 0);
             }
-
-            /*
-            if((segment_limit & mask) != mask)
-            {
-                // At least one bit in range 11:0 is 0
-                ASSERT(accessRights.granularity == 0);
-            }
-            */
 
             // If any bit in the limit field in the range 31:20 is 1, G must be 1
             if (MV_IS_FLAG_SET(segment_limit, 0xfff00000))
             {
                 ASSERT(accessRights.granularity == 1);
             }
-
-            /*
-            mask = 0xFFFFF000;
-
-            if((segment_limit & mask) != 0)
-            {
-                ASSERT(accessRights.granularity == 1);
-            }
-            */
 
             //
             // Bit 16 (Unusable). The unusable bit must be 0.
