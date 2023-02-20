@@ -4,7 +4,9 @@
         "kernel.h": "c",
         "*.tcc": "c",
         "slab.h": "c",
-        "x86.h": "c"
+        "x86.h": "c",
+        "assert.h": "c",
+        "compare": "c"
     },
     "C_Cpp.errorSquiggles": "disabled"
 }

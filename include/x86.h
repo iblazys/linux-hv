@@ -152,6 +152,16 @@ static inline uint8_t __vmx_vmptrld(void* vmcs_phys_addr)
     return ret;
 }
 
+static inline uint8_t __vmx_vmcall(uintptr_t hc, void *d)
+{
+	uint8_t error;
+	__asm __volatile("vmcall; setna %0"
+			 : "=q" (error)
+			 : "c" (hc), "d" (d)
+			 : "cc");
+	return error;
+}
+
 // testing
 static inline uint64_t vmread(uint64_t field) {
     uint64_t value;

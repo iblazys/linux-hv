@@ -23,10 +23,30 @@
 #define STACK_EFL_VCPU			16
 #define STACK_VCPU              17
 
+// test
+struct hypercall_request {
+    union {
+        struct {
+            uint16_t call_code : 16;
+            uint8_t fast : 1;
+            uint16_t variable_header_size : 10;
+            uint8_t rsvdZ1 : 4;
+            uint8_t is_nested : 1;
+            uint32_t rep_count : 12;
+            uint8_t rsvdZ2 : 4;
+            uint16_t rep_start_index : 12;
+            uint8_t rsvdZ3 : 4;
+        };
+        uint64_t data;
+    };
+};
+
 bool exit_handle_vmexit(uintptr_t *stack);
 void exit_handle_fail(uintptr_t *stack);
 
 bool exit_handle_invalid_guest_state(struct virtual_cpu* vcpu);
+
+bool exit_handle_write_msr(struct virtual_cpu* vcpu);
 
 /* should be called by a vmcall */
 static inline void exit_handle_vcpu_exit(struct virtual_cpu* vcpu)
@@ -65,6 +85,24 @@ static inline void exit_handle_vcpu_exit(struct virtual_cpu* vcpu)
 	ksm_write_reg(vcpu, STACK_REG_DX, ksm_read_reg(vcpu, STACK_REG_SP));
 	ksm_write_reg(vcpu, STACK_REG_AX, vcpu->eflags);
     */
+}
+
+// move these functions and the struct to a dedicated vcpu.h/c ?
+
+static inline void vcpu_advance_rip(struct virtual_cpu *vcpu)
+{
+	uint32_t instruction_len = (uint32_t)vmread(VMCS_VMEXIT_INSTRUCTION_LENGTH);
+	__vmx_vmwrite(VMCS_GUEST_RIP, vcpu->rip + instruction_len);
+}
+
+static inline uint32_t vcpu_read_reg32(struct virtual_cpu *vcpu, int reg)
+{
+	return (uint32_t)vcpu->host_sp[reg];
+}
+
+static inline uint64_t vcpu_combine_reg64(struct virtual_cpu *vcpu, int lo, int hi)
+{
+	return (uint64_t)vcpu_read_reg32(vcpu, lo) | (u64)vcpu_read_reg32(vcpu, hi) << 32;
 }
 
 #endif
